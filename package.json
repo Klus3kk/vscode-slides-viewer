@@ -1,0 +1,65 @@
+{
+  "name": "presentation-viewer",
+  "displayName": "Presentation Viewer",
+  "description": "Open PPTX, PPT, ODP and other presentations directly in VS Code.",
+  "version": "0.0.1",
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:pptx",
+    "onLanguage:ppt",
+    "onLanguage:odp",
+    "onLanguage:keynote",
+    "onCommand:presentationViewer.open"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "presentationViewer.open",
+        "title": "Open Presentation"
+      }
+    ],
+    "languages": [
+      {
+        "id": "pptx",
+        "extensions": [
+          ".pptx"
+        ]
+      },
+      {
+        "id": "ppt",
+        "extensions": [
+          ".ppt"
+        ]
+      },
+      {
+        "id": "odp",
+        "extensions": [
+          ".odp"
+        ]
+      },
+      {
+        "id": "keynote",
+        "extensions": [
+          ".key"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/vscode": "^1.106.1",
+    "typescript": "^5.9.3"
+  }
+}
