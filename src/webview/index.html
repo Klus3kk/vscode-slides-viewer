@@ -8,11 +8,14 @@
 </head>
 <body>
     <main class="wrapper">
-        <header>
-            <p class="eyebrow">Presentation Viewer</p>
-            <h1 id="file-name">Loading...</h1>
-        </header>
+        <section id="file-meta" class="card hidden">
+            <p id="file-meta-content"></p>
+        </section>
+        <section id="slides" class="card slides hidden">
+            <div id="slides-content"></div>
+        </section>
     </main>
+    <script src="{{jszip}}"></script>
     <script src="{{mainScript}}"></script>
 </body>
 </html>

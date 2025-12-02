@@ -40,6 +40,43 @@ h1 {
     line-height: 1.6;
 }
 
+.slides {
+    margin-top: 14px;
+    display: grid;
+    gap: 12px;
+}
+
+.slide {
+    padding: 12px 10px;
+    border-radius: 10px;
+    border: 1px solid #2c3b50;
+    background: #131c28;
+}
+
+.slide header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #243552;
+    color: #b9d0ff;
+    font-size: 12px;
+}
+
+.slide ul {
+    padding-left: 18px;
+}
+
 strong {
     color: #f9fafb;
+}
+
+.hidden {
+    display: none;
 }

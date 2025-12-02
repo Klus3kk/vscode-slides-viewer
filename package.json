@@ -13,6 +13,12 @@
     "Other"
   ],
   "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:**/*.pptx",
+    "workspaceContains:**/*.ppt",
+    "workspaceContains:**/*.odp",
+    "workspaceContains:**/*.key",
+    "onCustomEditor:presentationViewer.viewer",
     "onLanguage:pptx",
     "onLanguage:ppt",
     "onLanguage:odp",
@@ -51,6 +57,19 @@
         "extensions": [
           ".key"
         ]
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "presentationViewer.viewer",
+        "displayName": "Presentation Viewer",
+        "selector": [
+          { "filenamePattern": "*.pptx" },
+          { "filenamePattern": "*.ppt" },
+          { "filenamePattern": "*.odp" },
+          { "filenamePattern": "*.key" }
+        ],
+        "priority": "default"
       }
     ]
   },
