@@ -119,22 +119,26 @@ body {
 
 .shape {
     position: absolute;
-    overflow: hidden;
-    color: #000000;
-    line-height: 1.4;
-    font-size: 16px;
-    padding: 8px;
-    border-radius: 2px;
+    overflow: visible;
+    line-height: 1.2;
+    padding: 0;
+    border-radius: 0;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+    flex-direction: column;
     word-wrap: break-word;
 }
 
 .text-shape {
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid rgba(0, 0, 0, 0.1);
+    align-items: center;
+    justify-content: center;
+}
+
+.image-shape {
+    padding: 0;
+    border: none;
+    background: none;
+    object-fit: contain;
+    display: block;
 }
 
 .image-shape {
