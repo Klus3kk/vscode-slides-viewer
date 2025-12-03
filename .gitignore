@@ -3,3 +3,4 @@ package-lock.json
 *.pptx
 dist
 .vscode/
+*.odp

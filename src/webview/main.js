@@ -535,6 +535,74 @@ async function renderPptxSlides(base64) {
     return slides;
 }
 
+function parseStyleProps(styleEl) {
+    const props = {};
+    if (!styleEl) return props;
+    const paraProps = Array.from(styleEl.children).find((el) => el.localName === "paragraph-properties");
+    if (paraProps) {
+        const marL = paraProps.getAttribute("fo:margin-left") || paraProps.getAttribute("margin-left");
+        const indent = paraProps.getAttribute("fo:text-indent") || paraProps.getAttribute("text-indent");
+        if (marL) props.marL = marL;
+        if (indent) props.indent = indent;
+        const align = paraProps.getAttribute("fo:text-align") || paraProps.getAttribute("text-align");
+        if (align) props.align = align;
+    }
+
+    const textProps = Array.from(styleEl.children).find((el) => el.localName === "text-properties");
+    if (textProps) {
+        const fontSize = textProps.getAttribute("fo:font-size") || textProps.getAttribute("font-size");
+        if (fontSize) props.fontSize = fontSize;
+        const fontWeight = textProps.getAttribute("fo:font-weight") || textProps.getAttribute("font-weight");
+        if (fontWeight) props.fontWeight = fontWeight;
+        const fontStyle = textProps.getAttribute("fo:font-style") || textProps.getAttribute("font-style");
+        if (fontStyle) props.fontStyle = fontStyle;
+        const color = textProps.getAttribute("fo:color") || textProps.getAttribute("color");
+        if (color) props.color = color;
+        const fontFamily = textProps.getAttribute("style:font-name") || textProps.getAttribute("font-name");
+        if (fontFamily) props.fontFamily = fontFamily;
+    }
+    return props;
+}
+
+function parseOdpStyles(xmlText) {
+    const styles = {};
+    const listStyles = {};
+    if (!xmlText) return { styles, listStyles };
+    const doc = parseXml(xmlText);
+    if (!doc) return { styles, listStyles };
+
+    const styleNodes = Array.from(doc.getElementsByTagName("*")).filter((el) => el.localName === "style");
+    for (const style of styleNodes) {
+        const name = style.getAttribute("style:name");
+        const family = style.getAttribute("style:family");
+        if (!name) continue;
+        if (family === "text" || family === "paragraph") {
+            styles[name] = parseStyleProps(style);
+        }
+    }
+
+    const listNodes = Array.from(doc.getElementsByTagName("*")).filter((el) => el.localName === "list-style");
+    for (const list of listNodes) {
+        const name = list.getAttribute("style:name");
+        if (!name) continue;
+        const levels = {};
+        const levelNodes = Array.from(list.children).filter((el) => el.localName.startsWith("list-level-style"));
+        for (const lvl of levelNodes) {
+            const level = parseInt(lvl.getAttribute("text:level") || "1", 10);
+            const ch = lvl.getAttribute("text:bullet-char") || "•";
+            const llProps = Array.from(lvl.children).find((el) => el.localName === "list-level-properties");
+            const spaceBefore = llProps?.getAttribute("text:space-before") || llProps?.getAttribute("space-before") || "0";
+            const minLabelWidth = llProps?.getAttribute("text:min-label-width") || llProps?.getAttribute("min-label-width") || "0";
+            levels[level] = { char: ch, spaceBefore, minLabelWidth };
+        }
+        if (Object.keys(levels).length > 0) {
+            listStyles[name] = levels;
+        }
+    }
+
+    return { styles, listStyles };
+}
+
 function lengthToPx(val) {
     if (!val) return 0;
     const n = parseFloat(val);
@@ -555,6 +623,17 @@ async function renderOdpSlides(base64) {
     const doc = parseXml(contentXml);
     if (!doc) return [];
 
+    const stylesXml = await zip.file("styles.xml")?.async("text");
+    const { styles: globalStyles, listStyles: globalListStyles } = parseOdpStyles(stylesXml);
+
+    const autoStylesNode = doc.querySelector("office\\:automatic-styles,automatic-styles");
+    const { styles: autoStyles, listStyles: autoListStyles } = autoStylesNode
+        ? parseOdpStyles(autoStylesNode.outerHTML)
+        : { styles: {}, listStyles: {} };
+
+    const allStyles = { ...globalStyles, ...autoStyles };
+    const allListStyles = { ...globalListStyles, ...autoListStyles };
+
     const pages = Array.from(doc.getElementsByTagName("*")).filter((el) => el.localName === "page");
     const slides = [];
 
@@ -566,7 +645,7 @@ async function renderOdpSlides(base64) {
             cy: Math.round(lengthToPx(hAttr) || 540)
         };
 
-        const frames = Array.from(page.children).filter((el) => el.localName === "frame" || el.localName === "textbox");
+        const frames = Array.from(page.getElementsByTagName("*")).filter((el) => el.localName === "frame");
         const shapes = [];
 
         for (const frame of frames) {
@@ -575,21 +654,90 @@ async function renderOdpSlides(base64) {
             const width = lengthToPx(frame.getAttribute("svg:width") || frame.getAttribute("width"));
             const height = lengthToPx(frame.getAttribute("svg:height") || frame.getAttribute("height"));
 
-            const textParas = Array.from(frame.getElementsByTagName("*")).filter((el) => el.localName === "p");
-            if (textParas.length === 0) {
-                continue;
+            const textBox = Array.from(frame.children).find((el) => el.localName === "text-box" || el.localName === "textbox") || frame;
+            const paragraphs = [];
+
+            function collectParas(node, level = 0, listStyleName = null) {
+                if (node.localName === "list") {
+                    const styleName = node.getAttribute("text:style-name") || listStyleName;
+                    const header = Array.from(node.children).find((el) => el.localName === "list-header");
+                    if (header) {
+                        Array.from(header.children).forEach((child) => collectParas(child, level + 1, styleName));
+                    }
+                    const items = Array.from(node.children).filter((el) => el.localName === "list-item");
+                    for (const item of items) {
+                        collectParas(item, level + 1, styleName);
+                    }
+                    return;
+                }
+
+                if (node.localName === "list-item") {
+                    const children = Array.from(node.children);
+                    for (const child of children) {
+                        collectParas(child, level, listStyleName);
+                    }
+                    return;
+                }
+
+                if (node.localName === "p") {
+                    const pStyleName = node.getAttribute("text:style-name");
+                    const pStyle = allStyles[pStyleName] || {};
+                    const spans = Array.from(node.childNodes)
+                        .filter((n) => n.nodeType === 3 || (n.nodeType === 1 && n.localName === "span"))
+                        .map((node) => {
+                            const text = node.textContent || "";
+                            const spanStyleName = node.nodeType === 1 ? node.getAttribute("text:style-name") : null;
+                            const spanStyle = spanStyleName ? allStyles[spanStyleName] || {} : {};
+                            return { text, style: mergeStyles(pStyle, spanStyle) };
+                        })
+                        .filter((s) => s.text.trim().length > 0);
+
+                    let bullet = null;
+                    if (listStyleName) {
+                        const levels = allListStyles[listStyleName] || {};
+                        const lvlDef = levels[level] || levels[1] || {};
+                        const bulletChar = lvlDef.char || "•";
+                        bullet = { type: "char", char: bulletChar, level };
+                    }
+
+                    const spaceBefore = listStyleName && (allListStyles[listStyleName]?.[level]?.spaceBefore || allListStyles[listStyleName]?.[1]?.spaceBefore);
+                    const minLabelWidth = listStyleName && (allListStyles[listStyleName]?.[level]?.minLabelWidth || allListStyles[listStyleName]?.[1]?.minLabelWidth);
+                    const indentPx = lengthToPx(spaceBefore || "0") + lengthToPx(minLabelWidth || "0");
+
+                    const marL = pStyle.marL ? lengthToPx(pStyle.marL) : 0;
+                    const textIndent = pStyle.indent ? lengthToPx(pStyle.indent) : 0;
+
+                    const align = pStyle.align || "left";
+
+                    let fontSize = pStyle.fontSize;
+                    const runsWithStyle = spans.map((s) => {
+                        if (s.style.fontSize) {
+                            fontSize = s.style.fontSize;
+                        } else if (fontSize) {
+                            s.style.fontSize = fontSize;
+                        }
+                        return s;
+                    });
+
+                    // Default font size if none defined anywhere (fallback based on outline vs title)
+                    if (!fontSize) {
+                        const isTitle = frame.getAttribute("presentation:class") === "title";
+                        fontSize = isTitle ? "44pt" : "18pt";
+                        runsWithStyle.forEach((s) => (s.style.fontSize = s.style.fontSize || fontSize));
+                    }
+
+                    paragraphs.push({
+                        align,
+                        runs: runsWithStyle,
+                        bullet,
+                        level: Math.max(level - 1, 0),
+                        marL: marL + indentPx,
+                        indent: textIndent
+                    });
+                }
             }
 
-            const paragraphs = textParas.map((p) => {
-                const spans = Array.from(p.childNodes)
-                    .filter((n) => n.nodeType === 3 || (n.nodeType === 1 && n.localName === "span"))
-                    .map((node) => {
-                        const text = node.textContent || "";
-                        return { text, style: {} };
-                    })
-                    .filter((s) => s.text.trim().length > 0);
-                return { align: "left", runs: spans, bullet: null, level: 0, marL: 0, indent: 0 };
-            });
+            Array.from(textBox.children).forEach((child) => collectParas(child, 0, null));
 
             shapes.push({
                 type: "text",
