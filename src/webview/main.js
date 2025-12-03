@@ -194,6 +194,34 @@ function getShapeGeometry(spPr) {
     return prstGeom?.getAttribute("prst") || null;
 }
 
+function parseRPrStyle(rPr) {
+    const style = {};
+    if (!rPr) return style;
+
+    const sz = rPr.getAttribute("sz");
+    if (sz) style.fontSize = `${parseInt(sz, 10) / 100}pt`;
+
+    const b = rPr.getAttribute("b");
+    if (b === "1") style.fontWeight = "bold";
+
+    const i = rPr.getAttribute("i");
+    if (i === "1") style.fontStyle = "italic";
+
+    const solidFill = Array.from(rPr.getElementsByTagName("*")).find((el) => el.localName === "solidFill");
+    if (solidFill) {
+        const color = getColorFromXml(solidFill);
+        if (color) style.color = color;
+    }
+
+    const latinFont = Array.from(rPr.getElementsByTagName("*")).find((el) => el.localName === "latin");
+    if (latinFont) {
+        const typeface = latinFont.getAttribute("typeface");
+        if (typeface) style.fontFamily = typeface;
+    }
+
+    return style;
+}
+
 function extractTextFromShape(shapeNode) {
     try {
         const txBody = Array.from(shapeNode.children).find((el) => el.localName === "txBody");
@@ -218,6 +246,7 @@ function extractTextFromShape(shapeNode) {
             let level = 0;
             let marL = 0;
             let indent = 0;
+            const paraDefaults = parseRPrStyle(Array.from(pPr?.children || []).find((el) => el.localName === "defRPr"));
             if (pPr) {
                 const algnAttr = pPr.getAttribute("algn");
                 if (algnAttr === "ctr") align = "center";
@@ -245,30 +274,13 @@ function extractTextFromShape(shapeNode) {
             
             for (const r of runs) {
                 const rPr = Array.from(r.children).find((el) => el.localName === "rPr");
-                const style = {};
-                
-                if (rPr) {
-                    const sz = rPr.getAttribute("sz");
-                    if (sz) style.fontSize = `${parseInt(sz) / 100}pt`;
-                    
-                    const b = rPr.getAttribute("b");
-                    if (b === "1") style.fontWeight = "bold";
-                    
-                    const i = rPr.getAttribute("i");
-                    if (i === "1") style.fontStyle = "italic";
-                    
-                    const solidFill = Array.from(rPr.getElementsByTagName("*")).find((el) => el.localName === "solidFill");
-                    if (solidFill) {
-                        const color = getColorFromXml(solidFill);
-                        if (color) style.color = color;
-                    }
-                    
-                    const latinFont = Array.from(rPr.getElementsByTagName("*")).find((el) => el.localName === "latin");
-                    if (latinFont) {
-                        const typeface = latinFont.getAttribute("typeface");
-                        if (typeface) style.fontFamily = typeface;
-                    }
-                }
+                const style = parseRPrStyle(rPr);
+                // Apply paragraph defaults where missing.
+                if (paraDefaults.fontSize && !style.fontSize) style.fontSize = paraDefaults.fontSize;
+                if (paraDefaults.fontWeight && !style.fontWeight) style.fontWeight = paraDefaults.fontWeight;
+                if (paraDefaults.fontStyle && !style.fontStyle) style.fontStyle = paraDefaults.fontStyle;
+                if (paraDefaults.color && !style.color) style.color = paraDefaults.color;
+                if (paraDefaults.fontFamily && !style.fontFamily) style.fontFamily = paraDefaults.fontFamily;
                 
                 const tNodes = Array.from(r.getElementsByTagName("*")).filter((el) => el.localName === "t");
                 const text = tNodes.map((t) => t.textContent || "").join("");
