@@ -535,6 +535,80 @@ async function renderPptxSlides(base64) {
     return slides;
 }
 
+function lengthToPx(val) {
+    if (!val) return 0;
+    const n = parseFloat(val);
+    if (isNaN(n)) return 0;
+    if (val.includes("mm")) return n * 3.7795275591;
+    if (val.includes("cm")) return n * 37.795275591;
+    if (val.includes("in")) return n * 96;
+    if (val.includes("pt")) return n * (96 / 72);
+    return n;
+}
+
+async function renderOdpSlides(base64) {
+    const buffer = decodeBase64ToUint8(base64);
+    const zip = await JSZip.loadAsync(buffer);
+    const contentXml = await zip.file("content.xml")?.async("text");
+    if (!contentXml) return [];
+
+    const doc = parseXml(contentXml);
+    if (!doc) return [];
+
+    const pages = Array.from(doc.getElementsByTagName("*")).filter((el) => el.localName === "page");
+    const slides = [];
+
+    for (const page of pages.slice(0, MAX_SLIDES)) {
+        const wAttr = page.getAttribute("svg:width") || page.getAttribute("width");
+        const hAttr = page.getAttribute("svg:height") || page.getAttribute("height");
+        const size = {
+            cx: Math.round(lengthToPx(wAttr) || 960),
+            cy: Math.round(lengthToPx(hAttr) || 540)
+        };
+
+        const frames = Array.from(page.children).filter((el) => el.localName === "frame" || el.localName === "textbox");
+        const shapes = [];
+
+        for (const frame of frames) {
+            const x = lengthToPx(frame.getAttribute("svg:x") || frame.getAttribute("x"));
+            const y = lengthToPx(frame.getAttribute("svg:y") || frame.getAttribute("y"));
+            const width = lengthToPx(frame.getAttribute("svg:width") || frame.getAttribute("width"));
+            const height = lengthToPx(frame.getAttribute("svg:height") || frame.getAttribute("height"));
+
+            const textParas = Array.from(frame.getElementsByTagName("*")).filter((el) => el.localName === "p");
+            if (textParas.length === 0) {
+                continue;
+            }
+
+            const paragraphs = textParas.map((p) => {
+                const spans = Array.from(p.childNodes)
+                    .filter((n) => n.nodeType === 3 || (n.nodeType === 1 && n.localName === "span"))
+                    .map((node) => {
+                        const text = node.textContent || "";
+                        return { text, style: {} };
+                    })
+                    .filter((s) => s.text.trim().length > 0);
+                return { align: "left", runs: spans, bullet: null, level: 0, marL: 0, indent: 0 };
+            });
+
+            shapes.push({
+                type: "text",
+                box: { x, y, cx: width || 400, cy: height || 200 },
+                fill: null,
+                geom: null,
+                textData: {
+                    paragraphs,
+                    verticalAlign: "flex-start"
+                }
+            });
+        }
+
+        slides.push({ path: "", size, shapes });
+    }
+
+    return slides;
+}
+
 function renderSlidesToHtml(slides) {
     return slides
         .map((slide, idx) => {
@@ -628,7 +702,9 @@ window.addEventListener("message", async (event) => {
             name.textContent = msg.fileName ?? "Presentation";
             document.body.dataset.loaded = "true";
             
-            if (msg.fileName?.toLowerCase().endsWith(".pptx")) {
+            const lowerName = msg.fileName?.toLowerCase() || "";
+
+            if (lowerName.endsWith(".pptx")) {
                 const slides = await renderPptxSlides(msg.base64);
                 slidesCache = slides;
                 
@@ -644,8 +720,24 @@ window.addEventListener("message", async (event) => {
                 updateSlideVisibility();
                 applyZoom();
                 updatePageInfo();
+            } else if (lowerName.endsWith(".odp")) {
+                const slides = await renderOdpSlides(msg.base64);
+                slidesCache = slides;
+
+                if (slides.length === 0) {
+                    slidesContent.innerHTML = "<p>No slides found.</p>";
+                    slidesEl.classList.remove("hidden");
+                    return;
+                }
+
+                slidesContent.innerHTML = renderSlidesToHtml(slides);
+                slidesEl.classList.remove("hidden");
+                currentSlide = 0;
+                updateSlideVisibility();
+                applyZoom();
+                updatePageInfo();
             } else {
-                slidesContent.innerHTML = "<p>Only PPTX files supported.</p>";
+                slidesContent.innerHTML = `<p>Preview for ${lowerName} not implemented. Currently PPTX only.</p>`;
                 slidesEl.classList.remove("hidden");
             }
         } catch (err) {
