@@ -134,8 +134,9 @@ body {
 }
 
 .text-shape {
-    align-items: center;
-    justify-content: center;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 6px 8px;
 }
 
 .para {

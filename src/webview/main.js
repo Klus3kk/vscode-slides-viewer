@@ -50,6 +50,17 @@ function parseXml(xml) {
     }
 }
 
+function mergeStyles(base, override) {
+    return { ...base, ...override };
+}
+
+function getPlaceholderType(shapeNode) {
+    const nvSpPr = Array.from(shapeNode.children).find((el) => el.localName === "nvSpPr");
+    const nvPr = nvSpPr ? Array.from(nvSpPr.children).find((el) => el.localName === "nvPr") : undefined;
+    const ph = nvPr ? Array.from(nvPr.children).find((el) => el.localName === "ph") : undefined;
+    return ph?.getAttribute("type") || null;
+}
+
 async function getSlideSize(zip) {
     try {
         const raw = zip.file("ppt/presentation.xml");
@@ -226,6 +237,9 @@ function extractTextFromShape(shapeNode) {
     try {
         const txBody = Array.from(shapeNode.children).find((el) => el.localName === "txBody");
         if (!txBody) return null;
+
+        const placeholderType = getPlaceholderType(shapeNode);
+        const shapeDefault = parseRPrStyle(Array.from(txBody.querySelectorAll("defRPr"))[0]);
         
         const bodyPr = Array.from(txBody.children).find((el) => el.localName === "bodyPr");
         let verticalAlign = "center";
@@ -274,13 +288,13 @@ function extractTextFromShape(shapeNode) {
             
             for (const r of runs) {
                 const rPr = Array.from(r.children).find((el) => el.localName === "rPr");
-                const style = parseRPrStyle(rPr);
-                // Apply paragraph defaults where missing.
-                if (paraDefaults.fontSize && !style.fontSize) style.fontSize = paraDefaults.fontSize;
-                if (paraDefaults.fontWeight && !style.fontWeight) style.fontWeight = paraDefaults.fontWeight;
-                if (paraDefaults.fontStyle && !style.fontStyle) style.fontStyle = paraDefaults.fontStyle;
-                if (paraDefaults.color && !style.color) style.color = paraDefaults.color;
-                if (paraDefaults.fontFamily && !style.fontFamily) style.fontFamily = paraDefaults.fontFamily;
+                const style = mergeStyles(shapeDefault, mergeStyles(paraDefaults, parseRPrStyle(rPr)));
+                if (!style.fontSize) {
+                    style.fontSize = placeholderType === "title" || placeholderType === "ctrTitle" ? "32pt" : "20pt";
+                }
+                if (!style.fontWeight && (placeholderType === "title" || placeholderType === "ctrTitle")) {
+                    style.fontWeight = "bold";
+                }
                 
                 const tNodes = Array.from(r.getElementsByTagName("*")).filter((el) => el.localName === "t");
                 const text = tNodes.map((t) => t.textContent || "").join("");
@@ -289,24 +303,11 @@ function extractTextFromShape(shapeNode) {
             }
             
             if (runData.length > 0) {
-                // Default bullet if paragraph has level >0 or a bullet type.
-                if (!bullet && level > 0) {
-                    bullet = { type: "char", char: "■", level };
-                }
                 textData.push({ align, runs: runData, bullet, level, marL, indent });
             }
         }
         
-        if (textData.length > 0) {
-            const hasBullet = textData.some((p) => p.bullet);
-            if (!hasBullet && textData.length > 1) {
-                textData.forEach((p) => {
-                    p.bullet = { type: "char", char: "•", level: p.level || 0 };
-                });
-            }
-            return { paragraphs: textData, verticalAlign };
-        }
-        return null;
+        return textData.length > 0 ? { paragraphs: textData, verticalAlign } : null;
     } catch (e) {
         return null;
     }
