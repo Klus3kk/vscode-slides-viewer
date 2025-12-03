@@ -11,11 +11,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 function log(message) {
-    const logContainer = document.getElementById("log");
-    const entries = document.getElementById("log-entries");
-    const ts = new Date().toLocaleTimeString();
-    entries.insertAdjacentHTML("afterbegin", `<div>[${ts}] ${message}</div>`);
-    logContainer.classList.remove("hidden");
+    // Logging UI removed; keep a safe no-op.
 }
 
 window.addEventListener("error", (ev) => log(`Runtime error: ${ev.message}`));
@@ -746,11 +742,38 @@ async function frameToShapes(frame, allStyles, allListStyles, zip, options = {})
         });
     }
 
-    const imageEl = Array.from(frame.getElementsByTagName("*")).find((el) => el.localName === "image");
-    const objectEl = Array.from(frame.getElementsByTagName("*")).find((el) => el.localName === "object");
-    const imageHref = imageEl ? (imageEl.getAttribute("xlink:href") || imageEl.getAttribute("href")) : null;
-    const replacementHref = objectEl ? (objectEl.getAttribute("xlink:href") || objectEl.getAttribute("href")) : null;
+    const tableEl = Array.from(frame.getElementsByTagName("*")).find((el) => el.localName === "table");
+    if (tableEl) {
+        const tableData = parseTableData(tableEl);
+        if (tableData) {
+            shapes.push({
+                type: "table",
+                box: { x, y, cx: width || 400, cy: height || 200 },
+                data: tableData,
+                isMaster
+            });
+            return shapes;
+        }
+    }
 
+    const objectEl = Array.from(frame.getElementsByTagName("*")).find((el) => el.localName === "object");
+    const imageEl = Array.from(frame.getElementsByTagName("*")).find((el) => el.localName === "image");
+    const objectHref = objectEl ? (objectEl.getAttribute("xlink:href") || objectEl.getAttribute("href")) : null;
+    if (objectHref) {
+        const chartData = await parseEmbeddedObjectChart(zip, objectHref);
+        if (chartData) {
+            shapes.push({
+                type: "chart",
+                box: { x, y, cx: width || 400, cy: height || 200 },
+                data: chartData,
+                isMaster
+            });
+            return shapes;
+        }
+    }
+
+    const imageHref = imageEl ? (imageEl.getAttribute("xlink:href") || imageEl.getAttribute("href")) : null;
+    const replacementHref = objectHref;
     const preferredImages = [imageHref, replacementHref].filter(Boolean);
     for (const href of preferredImages) {
         const src = await loadOdpImage(zip, href);
@@ -873,9 +896,6 @@ async function frameToShapes(frame, allStyles, allListStyles, zip, options = {})
                 const isTitle = presentationClass === "title";
                 fontSize = isTitle ? "44pt" : "18pt";
                 runsWithStyle.forEach((s) => (s.style.fontSize = s.style.fontSize || fontSize));
-                if (isTitle && !runsWithStyle[0]?.style.fontWeight) {
-                    runsWithStyle.forEach((s) => (s.style.fontWeight = s.style.fontWeight || "bold"));
-                }
             }
 
             if (runsWithStyle.length > 0) {
@@ -957,6 +977,36 @@ function parseOdpPageLayouts(stylesXml) {
         }
     }
     return layouts;
+}
+
+function parseTableData(tableEl) {
+    if (!tableEl) return null;
+    const rows = Array.from(tableEl.getElementsByTagName("*")).filter((el) => el.localName === "table-row");
+    if (!rows.length) return null;
+    const data = rows.map((row) => {
+        const cells = Array.from(row.children).filter((el) => el.localName === "table-cell");
+        return cells.map((cell) => (cell.textContent || "").trim());
+    });
+    return data.length ? data : null;
+}
+
+async function parseEmbeddedObjectChart(zip, href) {
+    if (!href) return null;
+    const cleanHref = href.replace(/^\.\//, "").replace(/^\/+/g, "");
+    const contentPath = `${cleanHref.replace(/\\+/g, "/").replace(/\/+$/, "")}/content.xml`;
+    const contentFile = zip.file(contentPath);
+    if (!contentFile) return null;
+    const xml = await contentFile.async("text");
+    const doc = parseXml(xml);
+    if (!doc) return null;
+    const tableEl = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "table");
+    const tableData = parseTableData(tableEl);
+    if (!tableData || tableData.length < 2) return null;
+
+    const headers = tableData[0].slice(1);
+    const categories = tableData.slice(1).map((row) => row[0] || "");
+    const values = headers.map((_, colIdx) => tableData.slice(1).map((row) => parseFloat(row[colIdx + 1]) || 0));
+    return { headers, categories, values };
 }
 
 async function renderOdpSlides(base64) {
@@ -1075,6 +1125,58 @@ function renderSlidesToHtml(slides) {
                     if (shape.type === "image") {
                         return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;" src="${shape.src}" alt="" />`;
                     }
+
+                    if (shape.type === "table" && Array.isArray(shape.data)) {
+                        const rowsHtml = shape.data
+                            .map((row, idx) => {
+                                const tag = idx === 0 ? "th" : "td";
+                                const cells = row.map((cell) => `<${tag}>${escapeHtml(cell || "")}</${tag}>`).join("");
+                                return `<tr>${cells}</tr>`;
+                            })
+                            .join("");
+                        return `<div class="shape table-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
+                            `<table>${rowsHtml}</table>` +
+                            `</div>`;
+                    }
+
+                    if (shape.type === "chart" && shape.data) {
+                        const colors = ["#2b5797", "#d24726", "#e3a21a", "#2d89ef"];
+                        const max = Math.max(...shape.data.values.flat(), 0);
+                        const plotPadding = { left: 40, right: 120, top: 10, bottom: 30 };
+                        const plotWidth = Math.max(80, width - plotPadding.left - plotPadding.right);
+                        const plotHeight = Math.max(80, height - plotPadding.top - plotPadding.bottom);
+                        const categoryCount = shape.data.categories.length || 1;
+                        const seriesCount = shape.data.headers.length || 1;
+                        const groupWidth = plotWidth / categoryCount;
+                        const barWidth = Math.max(8, Math.floor(groupWidth / seriesCount) - 6);
+                        const barGap = Math.max(4, Math.floor((groupWidth - barWidth * seriesCount) / (seriesCount + 1)));
+
+                        let barsHtml = "";
+                        let labelsHtml = "";
+
+                        shape.data.categories.forEach((cat, catIdx) => {
+                            const groupStart = plotPadding.left + catIdx * groupWidth;
+                            shape.data.headers.forEach((header, sIdx) => {
+                                const val = shape.data.values[sIdx]?.[catIdx] ?? 0;
+                                const h = max > 0 ? Math.round((val / max) * plotHeight) : 0;
+                                const leftPos = groupStart + barGap * (sIdx + 1) + barWidth * sIdx;
+                                const bottomPos = plotPadding.bottom;
+                                barsHtml += `<div class="chart-bar" style="left:${leftPos}px;bottom:${bottomPos}px;width:${barWidth}px;height:${h}px;background:${colors[sIdx % colors.length]};" title="${escapeHtml(header)}: ${val}"></div>`;
+                            });
+                            const labelCenter = groupStart + groupWidth / 2;
+                            labelsHtml += `<div class="chart-x-label" style="left:${labelCenter}px;bottom:${plotPadding.bottom - 18}px;">${escapeHtml(cat)}</div>`;
+                        });
+
+                        const legend = shape.data.headers
+                            .map((name, idx) => `<div class="legend-item"><span class="legend-swatch" style="background:${colors[idx % colors.length]};"></span>${escapeHtml(name)}</div>`)
+                            .join("");
+
+                        return `<div class="shape chart-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
+                            `<div class="chart-grid"></div>` +
+                            `<div class="chart-plot" style="height:${height}px;">${barsHtml}${labelsHtml}</div>` +
+                            `<div class="chart-legend">${legend}</div>` +
+                            `</div>`;
+                    }
                     
                     if (shape.textData) {
                         const verticalAlign = shape.textData.verticalAlign || 'center';
@@ -1186,16 +1288,13 @@ function bindControls() {
     const zoomIn = document.getElementById("zoom-in");
     const zoomOut = document.getElementById("zoom-out");
     const zoomReset = document.getElementById("zoom-reset");
-    const toggleLog = document.getElementById("toggle-log");
     
     prev?.addEventListener("click", () => changeSlide(-1));
     next?.addEventListener("click", () => changeSlide(1));
     zoomIn?.addEventListener("click", () => changeZoom(0.1));
     zoomOut?.addEventListener("click", () => changeZoom(-0.1));
     zoomReset?.addEventListener("click", () => setZoom(1));
-    toggleLog?.addEventListener("click", () => {
-        document.getElementById("log")?.classList.toggle("hidden");
-    });
+    // Log toggle removed
     
     const slidesContent = document.getElementById("slides-content");
     slidesContent?.addEventListener("wheel", (e) => {
