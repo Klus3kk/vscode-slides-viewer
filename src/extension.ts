@@ -4,8 +4,11 @@ import * as vscode from "vscode";
 
 const PRESENTATION_EXTENSIONS = [".pptx", ".ppt", ".odp", ".key"];
 const VIEW_TYPE = "presentationViewer.viewer";
+const channel = vscode.window.createOutputChannel("Presentation Viewer");
 
 export function activate(context: vscode.ExtensionContext) {
+  channel.appendLine("Presentation Viewer activated.");
+
   const provider = new PresentationViewerProvider(context);
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
@@ -66,10 +69,13 @@ class PresentationViewerProvider implements vscode.CustomReadonlyEditorProvider<
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   async openCustomDocument(uri: vscode.Uri): Promise<vscode.CustomDocument> {
+    channel.appendLine(`openCustomDocument: ${uri.fsPath}`);
     return { uri, dispose: () => undefined };
   }
 
   async resolveCustomEditor(document: vscode.CustomDocument, webviewPanel: vscode.WebviewPanel): Promise<void> {
+    channel.appendLine(`resolveCustomEditor: ${document.uri.fsPath}`);
+
     const assetRoots = [
       vscode.Uri.joinPath(this.context.extensionUri, "src", "webview"),
       vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "jszip", "dist")
@@ -83,12 +89,15 @@ class PresentationViewerProvider implements vscode.CustomReadonlyEditorProvider<
     try {
       hydrateWebview(webviewPanel.webview, this.context, document.uri.fsPath);
     } catch (error) {
+      channel.appendLine(`resolveCustomEditor error: ${String(error)}`);
       void vscode.window.showErrorMessage(`Unable to open presentation: ${String(error)}`);
     }
   }
 }
 
 async function openPresentation(filePath: string, context: vscode.ExtensionContext) {
+  channel.appendLine(`openPresentation: ${filePath}`);
+
   const assetRoots = [
     vscode.Uri.joinPath(context.extensionUri, "src", "webview"),
     vscode.Uri.joinPath(context.extensionUri, "node_modules", "jszip", "dist")
@@ -108,15 +117,33 @@ async function openPresentation(filePath: string, context: vscode.ExtensionConte
 }
 
 function hydrateWebview(webview: vscode.Webview, context: vscode.ExtensionContext, filePath: string) {
+  channel.appendLine(`hydrateWebview: ${filePath}`);
   webview.html = getWebviewContent(webview, context);
 
   const data = fs.readFileSync(filePath);
-  webview.postMessage({
+  const payload = {
     type: "loadFile",
     fileName: path.basename(filePath),
     size: data.byteLength,
     base64: data.toString("base64")
+  };
+
+  const readyTimeout = setTimeout(() => {
+    channel.appendLine("Webview did not signal ready within 2s; posting again.");
+    void webview.postMessage(payload);
+  }, 2000);
+
+  const readyListener = webview.onDidReceiveMessage((msg) => {
+    if (msg?.type === "ready") {
+      channel.appendLine("Webview signaled ready; posting payload.");
+      void webview.postMessage(payload);
+      clearTimeout(readyTimeout);
+    }
   });
+
+  // Fire once in case the webview is already ready.
+  channel.appendLine("Posting payload immediately.");
+  void webview.postMessage(payload);
 }
 
 function isPresentationFile(filePath: string): boolean {

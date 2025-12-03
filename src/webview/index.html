@@ -2,17 +2,32 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https:; style-src {{cspSource}}; script-src {{cspSource}};" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data: https:; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'unsafe-inline';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="{{styleSheet}}" />
 </head>
 <body>
     <main class="wrapper">
+        <section class="toolbar" id="toolbar">
+            <span id="file-name" class="title"></span>
+            <div class="controls">
+                <button id="prev" title="Previous slide">◀</button>
+                <button id="next" title="Next slide">▶</button>
+                <span id="page-info" class="muted">0 / 0</span>
+                <button id="zoom-out" title="Zoom out">-</button>
+                <button id="zoom-reset" title="Reset zoom">100%</button>
+                <button id="zoom-in" title="Zoom in">+</button>
+                <button id="toggle-log" title="Toggle log">Log</button>
+            </div>
+        </section>
         <section id="file-meta" class="card hidden">
             <p id="file-meta-content"></p>
         </section>
-        <section id="slides" class="card slides hidden">
+        <section id="slides" class="slides hidden">
             <div id="slides-content"></div>
+        </section>
+        <section id="log" class="card hidden">
+            <div id="log-entries"></div>
         </section>
     </main>
     <script src="{{jszip}}"></script>
