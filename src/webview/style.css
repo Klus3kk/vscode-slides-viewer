@@ -138,6 +138,23 @@ body {
     justify-content: center;
 }
 
+.para {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: 0;
+    line-height: 1.2;
+}
+
+.bullet {
+    flex: 0 0 auto;
+    min-width: 14px;
+    text-align: right;
+    font-size: 14px;
+    line-height: 1.2;
+    margin-right: 4px;
+}
+
 .image-shape {
     padding: 0;
     border: none;

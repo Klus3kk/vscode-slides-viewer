@@ -188,6 +188,12 @@ function getShapeFill(spPr) {
     return null;
 }
 
+function getShapeGeometry(spPr) {
+    if (!spPr) return null;
+    const prstGeom = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "prstGeom");
+    return prstGeom?.getAttribute("prst") || null;
+}
+
 function extractTextFromShape(shapeNode) {
     try {
         const txBody = Array.from(shapeNode.children).find((el) => el.localName === "txBody");
@@ -205,14 +211,33 @@ function extractTextFromShape(shapeNode) {
         const paragraphs = Array.from(txBody.getElementsByTagName("*")).filter((el) => el.localName === "p");
         const textData = [];
         
-        for (const p of paragraphs) {
+        for (const [paraIdx, p] of paragraphs.entries()) {
             const pPr = Array.from(p.children).find((el) => el.localName === "pPr");
             let align = "left";
+            let bullet = null;
+            let level = 0;
+            let marL = 0;
+            let indent = 0;
             if (pPr) {
                 const algnAttr = pPr.getAttribute("algn");
                 if (algnAttr === "ctr") align = "center";
                 else if (algnAttr === "r") align = "right";
                 else if (algnAttr === "l") align = "left";
+
+                marL = parseInt(pPr.getAttribute("marL") || "0", 10);
+                indent = parseInt(pPr.getAttribute("indent") || "0", 10);
+                const lvlAttr = pPr.getAttribute("lvl");
+                if (lvlAttr) level = parseInt(lvlAttr, 10) || 0;
+
+                const buChar = Array.from(pPr.children).find((el) => el.localName === "buChar");
+                if (buChar) {
+                    const ch = buChar.getAttribute("char") || "■";
+                    bullet = { type: "char", char: ch, level };
+                } else if (Array.from(pPr.children).some((el) => el.localName === "buAutoNum")) {
+                    const auto = Array.from(pPr.children).find((el) => el.localName === "buAutoNum");
+                    const startAt = auto ? parseInt(auto.getAttribute("startAt") || "1", 10) : 1;
+                    bullet = { type: "auto", index: startAt + paraIdx, level };
+                }
             }
             
             const runs = Array.from(p.children).filter((el) => el.localName === "r");
@@ -252,11 +277,24 @@ function extractTextFromShape(shapeNode) {
             }
             
             if (runData.length > 0) {
-                textData.push({ align, runs: runData });
+                // Default bullet if paragraph has level >0 or a bullet type.
+                if (!bullet && level > 0) {
+                    bullet = { type: "char", char: "■", level };
+                }
+                textData.push({ align, runs: runData, bullet, level, marL, indent });
             }
         }
         
-        return textData.length > 0 ? { paragraphs: textData, verticalAlign } : null;
+        if (textData.length > 0) {
+            const hasBullet = textData.some((p) => p.bullet);
+            if (!hasBullet && textData.length > 1) {
+                textData.forEach((p) => {
+                    p.bullet = { type: "char", char: "•", level: p.level || 0 };
+                });
+            }
+            return { paragraphs: textData, verticalAlign };
+        }
+        return null;
     } catch (e) {
         return null;
     }
@@ -315,6 +353,7 @@ async function parseMasterShapes(zip, masterPath) {
             
             const spPr = Array.from(sp.children).find((el) => el.localName === "spPr");
             const fill = getShapeFill(spPr);
+            const geom = getShapeGeometry(spPr);
             
             // Even if there's no text, we want to render shapes with fills (decorative elements)
             const textData = extractTextFromShape(sp);
@@ -326,6 +365,7 @@ async function parseMasterShapes(zip, masterPath) {
                     box,
                     fill,
                     textData,
+                    geom,
                     isMaster: true
                 });
             }
@@ -382,6 +422,7 @@ async function parseSlideShapes(zip, slidePath) {
             if (node.localName === "sp") {
                 const spPr = Array.from(node.children).find((el) => el.localName === "spPr");
                 const fill = getShapeFill(spPr);
+                const geom = getShapeGeometry(spPr);
                 const textData = extractTextFromShape(node);
                 
                 if (textData || fill) {
@@ -390,6 +431,7 @@ async function parseSlideShapes(zip, slidePath) {
                         box,
                         fill,
                         textData,
+                        geom,
                         isMaster: false
                     });
                 }
@@ -502,8 +544,18 @@ function renderSlidesToHtml(slides) {
                         }
                     }
                     
+                    const nearlySquare = Math.abs(width - height) / Math.max(width, height) < 0.15;
+                    let borderRadius = 0;
+                    if (shape.geom === "roundRect") {
+                        borderRadius = 12;
+                    } else if (shape.geom === "ellipse") {
+                        borderRadius = Math.min(width, height) / 2;
+                    } else if (!shape.geom && nearlySquare) {
+                        borderRadius = Math.min(width, height) / 2;
+                    }
+
                     if (shape.type === "image") {
-                        return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;" src="${shape.src}" alt="" />`;
+                        return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;" src="${shape.src}" alt="" />`;
                     }
                     
                     if (shape.textData) {
@@ -522,12 +574,21 @@ function renderSlidesToHtml(slides) {
                             }).join('');
                             
                             const textAlign = para.align || 'left';
-                            return `<p style="margin: 0; text-align: ${textAlign}; line-height: 1.2;">${runHtml}</p>`;
+                            const indentPx = Math.max(0, Math.round(((para.marL || 0) + (para.indent || 0)) * scale));
+                            let bulletHtml = "";
+                            if (para.bullet?.type === "char") {
+                                const bulletSize = para.runs[0]?.style.fontSize ? `font-size:${para.runs[0].style.fontSize}` : "";
+                                bulletHtml = `<span class="bullet" style="${bulletSize}">${escapeHtml(para.bullet.char)}</span>`;
+                            } else if (para.bullet?.type === "auto") {
+                                const bulletSize = para.runs[0]?.style.fontSize ? `font-size:${para.runs[0].style.fontSize}` : "";
+                                bulletHtml = `<span class="bullet" style="${bulletSize}">${para.bullet.index}.</span>`;
+                            }
+                            return `<p class="para" style="text-align:${textAlign}; padding-left:${indentPx}px;">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
-                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};">${textHtml}</div>`;
+                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};border-radius:${borderRadius}px;">${textHtml}</div>`;
                     } else {
-                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}"></div>`;
+                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle};border-radius:${borderRadius}px;"></div>`;
                     }
                 })
                 .join("");
