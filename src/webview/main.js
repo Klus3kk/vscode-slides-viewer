@@ -561,6 +561,14 @@ function parseStyleProps(styleEl) {
         const fontFamily = textProps.getAttribute("style:font-name") || textProps.getAttribute("font-name");
         if (fontFamily) props.fontFamily = fontFamily;
     }
+
+    const graphicProps = Array.from(styleEl.children).find((el) => el.localName === "graphic-properties");
+    if (graphicProps) {
+        const fill = graphicProps.getAttribute("draw:fill");
+        const fillColor = graphicProps.getAttribute("draw:fill-color");
+        if (fill && fill !== "none") props.fill = fill;
+        if (fillColor) props.fillColor = fillColor;
+    }
     return props;
 }
 
@@ -576,7 +584,7 @@ function parseOdpStyles(xmlText) {
         const name = style.getAttribute("style:name");
         const family = style.getAttribute("style:family");
         if (!name) continue;
-        if (family === "text" || family === "paragraph") {
+        if (family === "text" || family === "paragraph" || family === "graphic" || family === "presentation") {
             styles[name] = parseStyleProps(style);
         }
     }
@@ -654,6 +662,43 @@ async function renderOdpSlides(base64) {
             const width = lengthToPx(frame.getAttribute("svg:width") || frame.getAttribute("width"));
             const height = lengthToPx(frame.getAttribute("svg:height") || frame.getAttribute("height"));
 
+            const styleName = frame.getAttribute("presentation:style-name") || frame.getAttribute("draw:style-name");
+            const gStyle = styleName ? allStyles[styleName] || {} : {};
+
+            // Render filled rectangle for graphic styles with fill color.
+            if (gStyle.fill && gStyle.fill !== "none" && gStyle.fillColor) {
+                shapes.push({
+                    type: "shape",
+                    box: { x, y, cx: width || 400, cy: height || 200 },
+                    fill: { type: "solid", color: gStyle.fillColor },
+                    geom: null,
+                    textData: null,
+                    isMaster: false
+                });
+            }
+
+            // Images
+            const imageEl = Array.from(frame.getElementsByTagName("*")).find((el) => el.localName === "image");
+            if (imageEl) {
+                const href = imageEl.getAttribute("xlink:href") || imageEl.getAttribute("href");
+                if (href) {
+                    const cleanHref = href.replace(/^\.\//, "");
+                    const file = zip.file(cleanHref);
+                    if (file) {
+                        const dataUrl = `data:image/${cleanHref.split(".").pop()};base64,${await file.async("base64")}`;
+                        shapes.push({
+                            type: "image",
+                            box: { x, y, cx: width || 400, cy: height || 200 },
+                            fill: null,
+                            geom: null,
+                            src: dataUrl,
+                            isMaster: false
+                        });
+                        continue; // Skip text parsing for pure image frames.
+                    }
+                }
+            }
+
             const textBox = Array.from(frame.children).find((el) => el.localName === "text-box" || el.localName === "textbox") || frame;
             const paragraphs = [];
 
@@ -716,6 +761,11 @@ async function renderOdpSlides(base64) {
                         } else if (fontSize) {
                             s.style.fontSize = fontSize;
                         }
+                        // Apply color/weight defaults from paragraph style if missing.
+                        if (pStyle.color && !s.style.color) s.style.color = pStyle.color;
+                        if (pStyle.fontWeight && !s.style.fontWeight) s.style.fontWeight = pStyle.fontWeight;
+                        if (pStyle.fontStyle && !s.style.fontStyle) s.style.fontStyle = pStyle.fontStyle;
+                        if (pStyle.fontFamily && !s.style.fontFamily) s.style.fontFamily = pStyle.fontFamily;
                         return s;
                     });
 
