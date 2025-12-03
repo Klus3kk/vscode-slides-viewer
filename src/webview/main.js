@@ -6,14 +6,8 @@ let zoom = 1;
 const vscode = acquireVsCodeApi();
 
 window.addEventListener("DOMContentLoaded", () => {
-    log("Webview ready; requesting file bytes.");
     vscode.postMessage({ type: "ready" });
     bindControls();
-    setTimeout(() => {
-        if (!document.body.dataset.loaded) {
-            log("Waiting for file bytes…");
-        }
-    }, 1000);
 });
 
 function log(message) {
@@ -49,13 +43,9 @@ function parseXml(xml) {
     try {
         const doc = new DOMParser().parseFromString(xml, "application/xml");
         const parseError = doc.querySelector("parsererror");
-        if (parseError) {
-            log(`XML parse error: ${parseError.textContent}`);
-            return null;
-        }
+        if (parseError) return null;
         return doc;
     } catch (e) {
-        log(`XML parsing exception: ${e.message}`);
         return null;
     }
 }
@@ -126,55 +116,36 @@ function buildRelationshipMap(relsXml) {
 
 async function getSlideMasterPath(zip, slidePath) {
     try {
-        // Get slide layout from slide relationships
         const slideRelsPath = slidePath.replace("slides/slide", "slides/_rels/slide") + ".rels";
         const slideRelsXml = await zip.file(slideRelsPath)?.async("text");
-        if (!slideRelsXml) {
-            log(`  No slide rels found: ${slideRelsPath}`);
-            return null;
-        }
+        if (!slideRelsXml) return null;
         
         const slideRels = buildRelationshipMap(slideRelsXml);
         const layoutRel = Object.entries(slideRels).find(([_, target]) => target.includes("slideLayout"));
-        if (!layoutRel) {
-            log(`  No layout relationship found`);
-            return null;
-        }
+        if (!layoutRel) return null;
         
-        // Resolve layout path (handle ../ relative paths)
         let layoutPath = layoutRel[1];
         if (layoutPath.startsWith("../")) {
             layoutPath = layoutPath.replace("../", "");
         }
         layoutPath = `ppt/${layoutPath}`;
-        log(`  Layout path: ${layoutPath}`);
         
-        // Get slide master from layout relationships
         const layoutRelsPath = layoutPath.replace("slideLayouts/slideLayout", "slideLayouts/_rels/slideLayout") + ".rels";
         const layoutRelsXml = await zip.file(layoutRelsPath)?.async("text");
-        if (!layoutRelsXml) {
-            log(`  No layout rels found: ${layoutRelsPath}`);
-            return null;
-        }
+        if (!layoutRelsXml) return null;
         
         const layoutRels = buildRelationshipMap(layoutRelsXml);
         const masterRel = Object.entries(layoutRels).find(([_, target]) => target.includes("slideMaster"));
-        if (!masterRel) {
-            log(`  No master relationship found`);
-            return null;
-        }
+        if (!masterRel) return null;
         
-        // Resolve master path
         let masterPath = masterRel[1];
         if (masterPath.startsWith("../")) {
             masterPath = masterPath.replace("../", "");
         }
         masterPath = `ppt/${masterPath}`;
-        log(`  Master path: ${masterPath}`);
         
         return masterPath;
     } catch (e) {
-        log(`Error finding slide master: ${e.message}`);
         return null;
     }
 }
@@ -222,7 +193,6 @@ function extractTextFromShape(shapeNode) {
         const txBody = Array.from(shapeNode.children).find((el) => el.localName === "txBody");
         if (!txBody) return null;
         
-        // Get body properties for text box padding/alignment
         const bodyPr = Array.from(txBody.children).find((el) => el.localName === "bodyPr");
         let verticalAlign = "center";
         if (bodyPr) {
@@ -288,7 +258,6 @@ function extractTextFromShape(shapeNode) {
         
         return textData.length > 0 ? { paragraphs: textData, verticalAlign } : null;
     } catch (e) {
-        log(`Error extracting text: ${e.message}`);
         return null;
     }
 }
@@ -378,7 +347,6 @@ async function getSlideRelationships(zip, slidePath) {
         const relXml = await relFile.async("text");
         return buildRelationshipMap(relXml);
     } catch (e) {
-        log(`Error getting slide relationships: ${e.message}`);
         return {};
     }
 }
@@ -426,7 +394,6 @@ async function parseSlideShapes(zip, slidePath) {
                     });
                 }
             } else if (node.localName === "pic") {
-                // Extract image
                 const blipEl = Array.from(node.getElementsByTagName("*")).find((el) => el.localName === "blip");
                 const embed = blipEl?.getAttribute("r:embed") || 
                              blipEl?.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
@@ -438,10 +405,7 @@ async function parseSlideShapes(zip, slidePath) {
                 
                 const mediaPath = resolveMediaPath(slidePath, target);
                 const mediaFile = zip.file(mediaPath);
-                if (!mediaFile) {
-                    log(`Image not found: ${mediaPath}`);
-                    continue;
-                }
+                if (!mediaFile) continue;
                 
                 const ext = mediaPath.split(".").pop()?.toLowerCase();
                 const mimeTypes = {
@@ -465,14 +429,13 @@ async function parseSlideShapes(zip, slidePath) {
                         isMaster: false
                     });
                 } catch (e) {
-                    log(`Error loading image ${mediaPath}: ${e.message}`);
+                    // Skip images that fail to load
                 }
             }
         }
         
         return shapes;
     } catch (e) {
-        log(`Error parsing slide shapes: ${e.message}`);
         return [];
     }
 }
@@ -492,13 +455,10 @@ async function renderPptxSlides(base64) {
     
     const slideSize = await getSlideSize(zip);
     const slidePaths = (await getSlideOrder(zip)).slice(0, MAX_SLIDES);
-    log(`Processing ${slidePaths.length} slides`);
-    
     const slides = [];
     
     for (let i = 0; i < slidePaths.length; i++) {
         const slidePath = slidePaths[i];
-        log(`Processing slide ${i + 1}`);
         
         try {
             const masterPath = await getSlideMasterPath(zip, slidePath);
@@ -513,7 +473,7 @@ async function renderPptxSlides(base64) {
                 shapes: allShapes
             });
         } catch (e) {
-            log(`Error processing slide ${i + 1}: ${e.message}`);
+            // Skip slides that fail to parse
         }
     }
     
@@ -577,7 +537,6 @@ function renderSlidesToHtml(slides) {
                     <div class="slide-canvas" style="width:${VIEW_WIDTH}px;height:${heightPx}px;background:#ffffff;">
                         ${shapesHtml}
                     </div>
-                    <div class="slide-label">Slide ${idx + 1}</div>
                 </article>
             `;
         })
@@ -588,24 +547,16 @@ window.addEventListener("message", async (event) => {
     const msg = event.data;
     if (msg?.type === "loadFile") {
         const name = document.getElementById("file-name");
-        const meta = document.getElementById("file-meta");
-        const metaContent = document.getElementById("file-meta-content");
         const slidesEl = document.getElementById("slides");
         const slidesContent = document.getElementById("slides-content");
         
         try {
             name.textContent = msg.fileName ?? "Presentation";
-            metaContent.innerHTML = `<p><strong>Size:</strong> ${formatBytes(msg.size)}</p>`;
-            meta.classList.remove("hidden");
-            log(`Received file (${formatBytes(msg.size)})`);
             document.body.dataset.loaded = "true";
             
             if (msg.fileName?.toLowerCase().endsWith(".pptx")) {
-                const started = performance.now();
                 const slides = await renderPptxSlides(msg.base64);
                 slidesCache = slides;
-                const durationMs = performance.now() - started;
-                log(`Parsed in ${durationMs.toFixed(0)}ms; showing ${slides.length} slides`);
                 
                 if (slides.length === 0) {
                     slidesContent.innerHTML = "<p>No slides found.</p>";
@@ -624,11 +575,8 @@ window.addEventListener("message", async (event) => {
                 slidesEl.classList.remove("hidden");
             }
         } catch (err) {
-            metaContent.innerHTML = `<p><strong>Error:</strong> ${String(err)}</p>`;
-            meta.classList.remove("hidden");
-            slidesContent.innerHTML = `<p>Error: ${String(err)}</p>`;
+            slidesContent.innerHTML = `<p>Error loading presentation.</p>`;
             slidesEl.classList.remove("hidden");
-            log(`Error: ${String(err)}`);
         }
     }
 });

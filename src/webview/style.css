@@ -5,8 +5,8 @@
 }
 
 body {
-    font-family: "Arial", sans-serif;
-    background: #2b2b2b;
+    font-family: -apple-system, BlinkMacSystemFont, "Arial", Roboto, sans-serif;
+    background: #1e1e1e;
     color: #e0e0e0;
     overflow: hidden;
     height: 100vh;
@@ -19,63 +19,67 @@ body {
     flex-direction: column;
     height: 100vh;
     max-width: 100%;
-    margin: 0 auto;
 }
 
 .toolbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #1e1e1e;
+    background: linear-gradient(180deg, #2d2d2d 0%, #252525 100%);
     border-bottom: 1px solid #3c3c3c;
-    padding: 8px 16px;
+    padding: 10px 20px;
     flex-shrink: 0;
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .title {
     font-weight: 600;
     font-size: 14px;
-    color: #e0e0e0;
+    color: #ffffff;
+    letter-spacing: 0.3px;
 }
 
 .muted {
-    color: #888;
-    font-size: 12px;
-    margin: 0 8px;
+    color: #999;
+    font-size: 13px;
+    margin: 0 12px;
+    font-weight: 500;
 }
 
 .controls {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
 
 .controls button {
-    background: #333;
-    color: #e0e0e0;
-    border: 1px solid #555;
-    border-radius: 3px;
-    padding: 5px 12px;
+    background: linear-gradient(180deg, #3a3a3a 0%, #2e2e2e 100%);
+    color: #e8e8e8;
+    border: 1px solid #4a4a4a;
+    border-radius: 5px;
+    padding: 6px 14px;
     cursor: pointer;
     font-size: 13px;
-    transition: background 0.2s;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .controls button:hover {
-    background: #444;
+    background: linear-gradient(180deg, #454545 0%, #383838 100%);
+    border-color: #5a5a5a;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .controls button:active {
-    background: #555;
+    transform: translateY(1px);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .card {
     background: #252525;
     border: 1px solid #3c3c3c;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 12px 16px;
     margin: 8px 16px;
     line-height: 1.5;
@@ -88,8 +92,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: auto;
-    padding: 20px;
+    overflow: hidden;
+    padding: 30px 20px;
     position: relative;
 }
 
@@ -97,16 +101,16 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
+    width: 100%;
+    height: 100%;
 }
 
 .slide-frame {
-    position: relative;
-    border-radius: 2px;
+    border-radius: 4px;
     border: 1px solid #444;
-    overflow: hidden;
+    overflow: visible;
     background: #ffffff;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
     margin: 0 auto;
 }
 
@@ -114,6 +118,7 @@ body {
     position: relative;
     width: 100%;
     height: 100%;
+    overflow: visible;
     background: #ffffff;
 }
 
@@ -141,49 +146,27 @@ body {
     display: block;
 }
 
-.image-shape {
-    padding: 0;
-    border: none;
-    background: none;
-    object-fit: contain;
-}
-
-.slide-label {
+/* .slide-label {
     position: absolute;
-    right: 12px;
-    bottom: 12px;
+    right: 6px;
+    bottom: 6px;
     font-size: 11px;
     color: #666;
     background: rgba(255, 255, 255, 0.9);
-    padding: 4px 10px;
-    border-radius: 3px;
-    font-weight: 500;
-}
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+} */
 
 .hidden {
     display: none !important;
-}
-
-.hint {
-    color: #888;
-    font-size: 12px;
-    margin-bottom: 12px;
-    text-align: center;
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1e1e1e;
-    padding: 6px 12px;
-    border-radius: 3px;
-    white-space: nowrap;
 }
 
 #log {
     font-size: 11px;
     color: #e0e0e0;
     background: #1e1e1e;
-    border: 1px solid #3c3c3c;
+    border-top: 1px solid #3c3c3c;
     max-height: 200px;
     overflow-y: auto;
     position: fixed;
@@ -197,8 +180,8 @@ body {
 
 #log-entries div {
     margin-bottom: 4px;
-    padding: 2px 4px;
-    font-family: "Consolas", "Monaco", monospace;
+    padding: 2px 8px;
+    font-family: "Monaco", "Consolas", monospace;
 }
 
 #file-meta {
@@ -213,7 +196,6 @@ body {
     color: #4fc3f7;
 }
 
-/* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
