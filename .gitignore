@@ -1,6 +1,13 @@
+# Folders
 node_modules/
+.vscode/
+dist/
+Configurations2/
+
+# Files
 package-lock.json
 *.pptx
-dist
-.vscode/
 *.odp
+*.ppt 
+*.key
+*.log
