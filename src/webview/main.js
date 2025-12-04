@@ -1142,24 +1142,43 @@ async function renderKeySlides(base64) {
         const buffer = decodeBase64ToUint8(base64);
         const zip = await JSZip.loadAsync(buffer);
         const fileNames = Object.keys(zip.files);
-        const previews = fileNames.filter((name) => {
+        const previews = [];
+
+        // Prefer thumbs/st*.jpg (Keynote slide thumbnails)
+        for (const name of fileNames) {
             const lower = name.toLowerCase();
-            return (
-                (lower.includes("preview/") || lower.includes("previews/") || lower.startsWith("preview")) &&
-                (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))
-            );
-        });
+            if (!lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".png")) continue;
+            if (lower.includes("thumbs/") && /st\d+/i.test(lower)) {
+                previews.push({ name, order: extractTrailingNumber(lower) });
+            }
+        }
+        // Fallback to any previews folder images
+        if (previews.length === 0) {
+            for (const name of fileNames) {
+                const lower = name.toLowerCase();
+                if (!lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".png")) continue;
+                if (lower.includes("preview/") || lower.includes("previews/") || lower.startsWith("preview")) {
+                    previews.push({ name, order: extractTrailingNumber(lower) });
+                }
+            }
+        }
+        // QuickLook/Thumbnail as last resort (single slide)
+        if (previews.length === 0) {
+            for (const name of fileNames) {
+                const lower = name.toLowerCase();
+                if (lower.includes("quicklook/thumbnail") && (lower.endsWith(".jpg") || lower.endsWith(".png"))) {
+                    previews.push({ name, order: 0 });
+                }
+            }
+        }
 
         if (previews.length === 0) {
             return [];
         }
 
-        const sorted = previews.sort((a, b) => {
-            const na = extractTrailingNumber(a);
-            const nb = extractTrailingNumber(b);
-            if (na === nb) return a.localeCompare(b);
-            return na - nb;
-        });
+        const sorted = previews
+            .sort((a, b) => (a.order === b.order ? a.name.localeCompare(b.name) : a.order - b.order))
+            .map((p) => p.name);
 
         const slides = [];
         for (const name of sorted.slice(0, MAX_SLIDES)) {
