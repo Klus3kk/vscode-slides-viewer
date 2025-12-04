@@ -232,9 +232,14 @@ function parseRPrStyle(rPr) {
 function extractTextFromShape(shapeNode) {
     try {
         const txBody = Array.from(shapeNode.children).find((el) => el.localName === "txBody");
-        if (!txBody) return null;
+        if (!txBody) {
+            console.log("No txBody found in shape");
+            return null;
+        }
 
         const placeholderType = getPlaceholderType(shapeNode);
+        console.log("Placeholder type:", placeholderType);
+        
         const shapeDefault = parseRPrStyle(Array.from(txBody.querySelectorAll("defRPr"))[0]);
         
         const bodyPr = Array.from(txBody.children).find((el) => el.localName === "bodyPr");
@@ -247,6 +252,8 @@ function extractTextFromShape(shapeNode) {
         }
         
         const paragraphs = Array.from(txBody.getElementsByTagName("*")).filter((el) => el.localName === "p");
+        console.log(`Found ${paragraphs.length} paragraphs`);
+        
         const textData = [];
         
         for (const [paraIdx, p] of paragraphs.entries()) {
@@ -257,6 +264,7 @@ function extractTextFromShape(shapeNode) {
             let marL = 0;
             let indent = 0;
             const paraDefaults = parseRPrStyle(Array.from(pPr?.children || []).find((el) => el.localName === "defRPr"));
+            
             if (pPr) {
                 const algnAttr = pPr.getAttribute("algn");
                 if (algnAttr === "ctr") align = "center";
@@ -285,8 +293,10 @@ function extractTextFromShape(shapeNode) {
             for (const r of runs) {
                 const rPr = Array.from(r.children).find((el) => el.localName === "rPr");
                 const style = mergeStyles(shapeDefault, mergeStyles(paraDefaults, parseRPrStyle(rPr)));
+                
+                // CRITICAL: Set default font sizes
                 if (!style.fontSize) {
-                    style.fontSize = placeholderType === "title" || placeholderType === "ctrTitle" ? "32pt" : "20pt";
+                    style.fontSize = placeholderType === "title" || placeholderType === "ctrTitle" ? "44pt" : "28pt";
                 }
                 if (!style.fontWeight && (placeholderType === "title" || placeholderType === "ctrTitle")) {
                     style.fontWeight = "bold";
@@ -294,6 +304,8 @@ function extractTextFromShape(shapeNode) {
                 
                 const tNodes = Array.from(r.getElementsByTagName("*")).filter((el) => el.localName === "t");
                 const text = tNodes.map((t) => t.textContent || "").join("");
+                
+                console.log("Text run:", text, "style:", style);
                 
                 if (text) runData.push({ text, style });
             }
@@ -303,11 +315,14 @@ function extractTextFromShape(shapeNode) {
             }
         }
         
+        console.log(`Returning ${textData.length} text paragraphs`);
         return textData.length > 0 ? { paragraphs: textData, verticalAlign } : null;
     } catch (e) {
+        console.error("Error in extractTextFromShape:", e);
         return null;
     }
 }
+
 
 async function parseMasterShapes(zip, masterPath) {
     try {
@@ -411,22 +426,36 @@ function resolveMediaPath(slidePath, target) {
 async function parseSlideShapes(zip, slidePath) {
     try {
         const xml = await zip.file(slidePath)?.async("text");
-        if (!xml) return [];
+        if (!xml) {
+            console.log("No XML for slide");
+            return [];
+        }
         
         const doc = parseXml(xml);
-        if (!doc) return [];
+        if (!doc) {
+            console.log("Failed to parse XML");
+            return [];
+        }
         
         const rels = await getSlideRelationships(zip, slidePath);
         
         const spTree = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "spTree");
-        if (!spTree) return [];
+        if (!spTree) {
+            console.log("No spTree found");
+            return [];
+        }
         
         const shapes = [];
         const spElements = Array.from(spTree.children).filter((el) => el.localName === "sp" || el.localName === "pic");
         
+        console.log(`Found ${spElements.length} elements in slide`);
+        
         for (const node of spElements) {
             const box = getShapeBox(node);
-            if (!box) continue;
+            if (!box) {
+                console.log("No box for element");
+                continue;
+            }
             
             if (node.localName === "sp") {
                 const spPr = Array.from(node.children).find((el) => el.localName === "spPr");
@@ -434,9 +463,16 @@ async function parseSlideShapes(zip, slidePath) {
                 const geom = getShapeGeometry(spPr);
                 const textData = extractTextFromShape(node);
                 
+                console.log("Shape found:", {
+                    hasFill: !!fill,
+                    hasText: !!textData,
+                    textContent: textData ? textData.paragraphs.length + " paragraphs" : "none"
+                });
+                
+                // THIS IS THE KEY LINE - keep shapes with text OR fill
                 if (textData || fill) {
                     shapes.push({
-                        type: "text",
+                        type: "text", // Always "text" for sp elements (they can contain text)
                         box,
                         fill,
                         textData,
@@ -485,8 +521,10 @@ async function parseSlideShapes(zip, slidePath) {
             }
         }
         
+        console.log(`Total shapes extracted from slide: ${shapes.length}`);
         return shapes;
     } catch (e) {
+        console.error("Error in parseSlideShapes:", e);
         return [];
     }
 }
@@ -1220,22 +1258,54 @@ function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
     if (!texts || texts.length === 0) return [];
 
     const shapes = [];
-    const titleText = texts[0];
-    const bodyTexts = texts.slice(1);
+    const splitTitleBody = (allTexts) => {
+        // Prefer explicit separation (multiple text runs)
+        if (allTexts.length > 1) {
+            return { title: allTexts[0], body: allTexts.slice(1).join("\n") };
+        }
+        const raw = allTexts[0] || "";
+        // Try blank-line or newline split
+        const parts = raw.split(/\r?\n\r?\n/).map((p) => p.trim()).filter(Boolean);
+        if (parts.length > 1) {
+            return { title: parts[0], body: parts.slice(1).join("\n\n") };
+        }
+        const lines = raw.split(/\r?\n+/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length > 1) {
+            return { title: lines[0], body: lines.slice(1).join("\n") };
+        }
+        // Fallback: first sentence or first 10 words as title
+        const sentenceMatch = raw.match(/^(.+?[.!?])\s+(.*)$/);
+        if (sentenceMatch) {
+            return { title: sentenceMatch[1].trim(), body: sentenceMatch[2].trim() };
+        }
+        const words = raw.split(/\s+/);
+        const titleWords = words.slice(0, Math.min(10, words.length)).join(" ");
+        const bodyWords = words.slice(Math.min(10, words.length)).join(" ");
+        return { title: titleWords, body: bodyWords };
+    };
 
-    // Title
+    const { title: titleText, body: bodyText } = splitTitleBody(texts);
+
+    // Title - larger font, positioned higher
     shapes.push({
         type: "text",
         box: {
             x: Math.round(slideWidthPx * 0.05),
-            y: Math.round(slideHeightPx * 0.11),
+            y: Math.round(slideHeightPx * 0.08),
             cx: Math.round(slideWidthPx * 0.9),
-            cy: Math.round(slideHeightPx * 0.13)
+            cy: Math.round(slideHeightPx * 0.14)
         },
         textData: {
             paragraphs: [{
                 align: "left",
-                runs: [{ text: titleText, style: { fontSize: "36pt", fontWeight: "bold", color: "#000000" } }],
+                runs: [{ 
+                    text: titleText, 
+                    style: { 
+                        fontSize: "42pt",
+                        fontWeight: "bold",
+                        color: "#000000" 
+                    } 
+                }],
                 level: 0,
                 marL: 0,
                 indent: 0
@@ -1245,35 +1315,48 @@ function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
         isMaster: false
     });
 
-    // Body
-    const rawParas = bodyTexts.length ? bodyTexts : [titleText];
-    const paragraphs = rawParas
-        .flatMap((p) => p.split(/\r?\n+/))
-        .map((p) => p.trim())
-        .filter(Boolean)
-        .map((p) => ({
-            align: "left",
-            runs: [{ text: p, style: { fontSize: "20pt", color: "#000000" } }],
-            level: 0,
-            marL: 0,
-            indent: 0
-        }));
+    // Body text - smaller font, positioned lower
+    const bodyChunks = Array.isArray(bodyText) ? bodyText : [bodyText];
+    const bodyTextNormalized = bodyChunks
+        .map((b) => (typeof b === "string" ? b : ""))
+        .join("\n");
 
-    if (paragraphs.length) {
-        shapes.push({
-            type: "text",
-            box: {
-                x: Math.round(slideWidthPx * 0.07),
-                y: Math.round(slideHeightPx * 0.24),
-                cx: Math.round(slideWidthPx * 0.86),
-                cy: Math.round(slideHeightPx * 0.6)
-            },
-            textData: {
-                paragraphs,
-                verticalAlign: "flex-start"
-            },
-            isMaster: false
-        });
+    if (bodyTextNormalized && bodyTextNormalized.trim().length > 0) {
+        const paragraphs = bodyTextNormalized
+            .split(/\r?\n+/)
+            .map((p) => p.trim())
+            .filter(Boolean)
+            .map((p) => ({
+                align: "left",
+                runs: [{ 
+                    text: p, 
+                    style: { 
+                        fontSize: "16pt",
+                        fontWeight: "normal",
+                        color: "#000000" 
+                    } 
+                }],
+                level: 0,
+                marL: 0,
+                indent: 0
+            }));
+
+        if (paragraphs.length) {
+            shapes.push({
+                type: "text",
+                box: {
+                    x: Math.round(slideWidthPx * 0.07),
+                    y: Math.round(slideHeightPx * 0.20),
+                    cx: Math.round(slideWidthPx * 0.86),
+                    cy: Math.round(slideHeightPx * 0.6)
+                },
+                textData: {
+                    paragraphs,
+                    verticalAlign: "flex-start"
+                },
+                isMaster: false
+            });
+        }
     }
 
     return shapes;
@@ -1347,17 +1430,25 @@ function parsePptStream(stream, pictures = []) {
     
     console.log(`Parsed ${slides.length} slides with shapes:`, slides.map(s => s.shapes.length));
     
-    // Merge text into slides
+    // Merge text into slides: gather text from records and any parsed text shapes,
+    // then replace text shapes with a consistent title/body layout.
     slides.forEach((slide, index) => {
-        const texts = textBySlide.get(index);
-        if (texts && texts.length > 0) {
-            const slideWidthPx = slide.size?.cx || 960;
-            const slideHeightPx = slide.size?.cy || 540;
-            // Replace existing text shapes with our generated layout for clarity
-            slide.shapes = slide.shapes.filter((s) => s.type !== "text");
-            const generated = buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx);
-            slide.shapes.push(...generated);
-        }
+        const recordTexts = textBySlide.get(index) || [];
+        const shapeTexts = slide.shapes
+            .filter((s) => s.type === "text" && s.textData?.paragraphs?.length)
+            .flatMap((s) =>
+                s.textData.paragraphs
+                    .map((p) => p.runs.map((r) => r.text || "").join(""))
+                    .filter((t) => t && t.trim().length > 0)
+            );
+        const allTexts = [...recordTexts, ...shapeTexts].filter((t) => t && t.trim().length > 0);
+        if (allTexts.length === 0) return;
+
+        const slideWidthPx = slide.size?.cx || 960;
+        const slideHeightPx = slide.size?.cy || 540;
+        const nonTextShapes = slide.shapes.filter((s) => s.type !== "text");
+        const generated = buildPptTextShapesFromList(allTexts, slideWidthPx, slideHeightPx);
+        slide.shapes = [...nonTextShapes, ...generated];
     });
     
     return slides;
@@ -1440,14 +1531,19 @@ function parseProgTags(stream, offset, endOffset) {
             break;
         }
         
-        // Look for text atoms in ProgTags
-        if (header.recType === 0x0FA0) { // TextCharsAtom
-            texts.push(readPptTextChars(stream, offset, header.recLen));
-        } else if (header.recType === 0x0FA8) { // TextBytesAtom
-            texts.push(readPptTextBytes(stream, offset, header.recLen));
+        // Look for text atoms in ProgTags - 0x0FA0 (TextCharsAtom) and 0x0FA8 (TextBytesAtom)
+        if (header.recType === 0x0FA0) {
+            const text = readPptTextChars(stream, offset, header.recLen);
+            console.log("    Found TextCharsAtom:", text.substring(0, 50));
+            if (text.trim()) texts.push(text);
+        } else if (header.recType === 0x0FA8) {
+            const text = readPptTextBytes(stream, offset, header.recLen);
+            console.log("    Found TextBytesAtom:", text.substring(0, 50));
+            if (text.trim()) texts.push(text);
         }
-        // Recurse into container records only (recVer & 0xF === 0xF)
+        // Recurse into container records (recVer & 0xF === 0xF means it's a container)
         else if (header.recVer === 0xF && header.recLen > 0) {
+            console.log(`    Recursing into container 0x${header.recType.toString(16)}`);
             const nested = parseProgTags(stream, offset, recordEnd);
             texts.push(...nested);
         }
@@ -1455,11 +1551,13 @@ function parseProgTags(stream, offset, endOffset) {
         offset = recordEnd;
     }
     
+    console.log(`  ProgTags extracted ${texts.length} text fragments`);
     return texts;
 }
 
 function parsePptSlide(stream, offset, endOffset, slideWidthPx, slideHeightPx) {
     const shapes = [];
+    const collectedTexts = [];
     
     console.log(`  Parsing slide from ${offset} to ${endOffset}`);
     
@@ -1483,20 +1581,40 @@ function parsePptSlide(stream, offset, endOffset, slideWidthPx, slideHeightPx) {
             const texts = parseProgTags(stream, offset, recordEnd);
             console.log("    ProgTags texts:", texts);
             if (texts.length > 0) {
-                shapes.push(...buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx));
+                collectedTexts.push(...texts);
             }
         }
-        // Look for text containers
-        else if (header.recType === 0x0FF0) { // RT_SlideListWithText
-            console.log("    Found text container in slide");
+        // SlideListWithText container (0x0FF0) - often holds body text
+        else if (header.recType === 0x0FF0) {
+            console.log("    Found SlideListWithText - parsing for text");
             const texts = parsePptSlideListWithText(stream, offset, recordEnd);
-            console.log("    Texts found:", texts);
+            console.log("    SlideListWithText texts:", texts);
             if (texts.length > 0) {
-                shapes.push(...buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx));
+                collectedTexts.push(...texts);
             }
+        }
+        // ALSO check for TextHeaderAtom (0x0F9F) and text containers
+        else if (header.recType === 0x0F9F) {
+            console.log("    Found TextHeaderAtom");
         }
         
         offset = recordEnd;
+    }
+    
+    // Replace any text shapes with a consistent layout using collected text and any parsed text shapes
+    const existingText = shapes
+        .filter((s) => s.type === "text" && s.textData?.paragraphs?.length)
+        .flatMap((s) =>
+            s.textData.paragraphs
+                .flatMap((p) => p.runs.map((r) => r.text || "").join(""))
+                .filter((t) => t && t.trim().length > 0)
+        );
+    const allTexts = [...collectedTexts, ...existingText].filter((t) => t && t.trim().length > 0);
+    if (allTexts.length > 0) {
+        const nonText = shapes.filter((s) => s.type !== "text");
+        const generated = buildPptTextShapesFromList(allTexts, slideWidthPx, slideHeightPx);
+        shapes.length = 0;
+        shapes.push(...nonText, ...generated);
     }
     
     console.log(`  Total shapes extracted: ${shapes.length}`);
@@ -1565,7 +1683,9 @@ function parsePptShapeProperties(stream, offset, length) {
 
 function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeight) {
     const shapes = [];
-    const shapeData = {};
+    let shapeData = {};  // Remove const - we need to reset this
+    
+    console.log(`        Parsing shape container from ${offset} to ${endOffset}`);
     
     while (offset < endOffset - 8) {
         const header = readPptRecordHeader(stream, offset);
@@ -1574,31 +1694,47 @@ function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeig
         
         if (recordEnd > endOffset) break;
         
+        console.log(`          Shape record: type=0x${header.recType.toString(16)}, len=${header.recLen}`);
+        
         try {
             // OfficeArtFOPT - shape formatting (0xF00B)
             if (header.recType === 0xF00B) {
                 const props = parsePptShapeProperties(stream, offset, header.recLen);
                 Object.assign(shapeData, props);
+                console.log("          Shape properties:", props);
             }
             // OfficeArtClientTextbox (0xF00D)
             else if (header.recType === 0xF00D) {
                 const text = parsePptClientTextbox(stream, offset, recordEnd);
-                if (text) shapeData.text = text;
-            }
-            // OfficeArtClientData (0xF011) - may contain image references
-            else if (header.recType === 0xF011) {
-                // Try to extract image data
-                const imageData = parsePptClientData(stream, offset, recordEnd);
-                if (imageData) {
-                    Object.assign(shapeData, imageData);
+                if (text) {
+                    console.log("          Found text:", text.substring(0, 50));
+                    shapeData.text = text;
                 }
+            }
+            // OfficeArtClientData (0xF011)
+            else if (header.recType === 0xF011) {
+                console.log("          Found ClientData (possibly image)");
             }
             // Nested shape containers (0xF002, 0xF003, 0xF004)
             else if (header.recType === 0xF002 || header.recType === 0xF003 || header.recType === 0xF004) {
+                // CRITICAL FIX: Before recursing, save current shape if it has data
+                if (shapeData.bounds || shapeData.text) {
+                    console.log(`        Creating shape before recursion:`, {
+                        hasBounds: !!shapeData.bounds,
+                        hasText: !!shapeData.text,
+                        text: shapeData.text ? shapeData.text.substring(0, 30) : null
+                    });
+                    const shape = createPptShape(shapeData, slideWidth, slideHeight);
+                    if (shape) {
+                        shapes.push(shape);
+                    }
+                    // Reset shapeData for next shape
+                    shapeData = {};
+                }
+                
+                // Now recurse into nested container
                 const nested = parsePptShapeContainer(stream, offset, recordEnd, slideWidth, slideHeight);
                 shapes.push(...nested);
-                // Reset shapeData after processing nested container
-                Object.keys(shapeData).forEach(key => delete shapeData[key]);
             }
         } catch (e) {
             console.error(`Error in shape container:`, e);
@@ -1607,8 +1743,13 @@ function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeig
         offset = recordEnd;
     }
     
-    // Create shape if we have bounds or text (text will use a fallback box)
-    if ((shapeData.bounds && (shapeData.bounds.left !== undefined || shapeData.bounds.right !== undefined)) || shapeData.text) {
+    // Create shape if we have remaining data at the end
+    if (shapeData.bounds || shapeData.text) {
+        console.log(`        Creating final shape:`, {
+            hasBounds: !!shapeData.bounds,
+            hasText: !!shapeData.text,
+            text: shapeData.text ? shapeData.text.substring(0, 30) : null
+        });
         const shape = createPptShape(shapeData, slideWidth, slideHeight);
         if (shape) {
             shapes.push(shape);
@@ -1655,6 +1796,8 @@ function parsePptShapeProperties(stream, offset, length) {
 function parsePptClientTextbox(stream, offset, endOffset) {
     const texts = [];
     
+    console.log(`      Parsing ClientTextbox from ${offset} to ${endOffset}`);
+    
     while (offset < endOffset - 8) {
         const header = readPptRecordHeader(stream, offset);
         offset += 8;
@@ -1662,22 +1805,33 @@ function parsePptClientTextbox(stream, offset, endOffset) {
         
         if (recordEnd > endOffset) break;
         
+        console.log(`        Textbox record: type=0x${header.recType.toString(16)}, len=${header.recLen}`);
+        
         // TextCharsAtom (0x0FA0) - Unicode text
         if (header.recType === 0x0FA0) {
             const text = readPptTextChars(stream, offset, header.recLen);
+            console.log("        Found Unicode text:", text.substring(0, 50));
             if (text.trim()) texts.push(text);
         }
         // TextBytesAtom (0x0FA8) - ANSI text
         else if (header.recType === 0x0FA8) {
             const text = readPptTextBytes(stream, offset, header.recLen);
+            console.log("        Found ANSI text:", text.substring(0, 50));
             if (text.trim()) texts.push(text);
+        }
+        // Recurse into containers
+        else if (header.recVer === 0xF && header.recLen > 0) {
+            console.log(`        Recursing into textbox container 0x${header.recType.toString(16)}`);
+            const nested = parsePptClientTextbox(stream, offset, recordEnd);
+            if (nested) texts.push(nested);
         }
         
         offset = recordEnd;
     }
     
-    // Join all text fragments with a space instead of newline
-    return texts.length > 0 ? texts.join(" ") : null;
+    const result = texts.length > 0 ? texts.join(" ") : null;
+    console.log(`      ClientTextbox result: ${result ? result.substring(0, 50) : "null"}`);
+    return result;
 }
 
 function parsePptSlideListWithText(stream, offset, endOffset) {
@@ -1730,7 +1884,7 @@ function createPptShape(data, slideWidth, slideHeight) {
     
     const emusToPixels = (emus) => Math.round(emus / 9525);
     
-    // If we have bounds, use them (convert EMUs -> px), otherwise fallback
+    // If we have bounds, use them
     if (data.bounds && data.bounds.left !== undefined) {
         const { left = 0, top = 0, right = slideWidth * 9525, bottom = slideHeight * 9525 } = data.bounds;
         const shape = {
@@ -1744,69 +1898,64 @@ function createPptShape(data, slideWidth, slideHeight) {
             isMaster: false
         };
         
-        if (data.text) {
-            const minX = Math.round(slideWidth * 0.05);
-            const minY = Math.round(slideHeight * 0.12);
-            const minH = Math.round(slideHeight * 0.25);
-            if (shape.box.x < minX) {
-                const delta = minX - shape.box.x;
-                shape.box.x = minX;
-                shape.box.cx = Math.max(10, shape.box.cx - delta);
-            }
-            if (shape.box.y < minY) {
-                const delta = minY - shape.box.y;
-                shape.box.y = minY;
-                shape.box.cy = Math.max(10, shape.box.cy - delta);
-            }
-            if (shape.box.cy < minH) {
-                shape.box.cy = minH;
-            }
-        }
-        
         if (data.fillColor && data.fillType !== 0) {
             shape.fill = { type: "solid", color: data.fillColor };
         }
         
         if (data.text) {
+            // Determine font size based on box position (higher = likely title)
+            const relativeY = emusToPixels(top) / slideHeight;
+            const isLikelyTitle = relativeY < 0.15;  // Top 15% of slide
+            
             shape.textData = {
                 paragraphs: [{
                     align: "left",
                     runs: [{ 
                         text: data.text,
-                        style: { fontSize: "14pt", color: "#000000" }
+                        style: { 
+                            fontSize: isLikelyTitle ? "40pt" : "18pt",  // Title vs body
+                            fontWeight: isLikelyTitle ? "bold" : "normal",
+                            color: "#000000" 
+                        }
                     }],
                     level: 0,
                     marL: 0,
                     indent: 0
                 }],
-                verticalAlign: "center"
+                verticalAlign: "flex-start"
             };
         }
         
         return shape;
     }
     
+    // If we only have text (no bounds), create a default text box
     if (data.text) {
+        console.log("Creating text-only shape (no bounds):", data.text.substring(0, 50));
         return {
             type: "text",
             box: {
                 x: Math.round(slideWidth * 0.05),
-                y: Math.round(slideHeight * 0.22),
+                y: Math.round(slideHeight * 0.08),   // Higher
                 cx: Math.round(slideWidth * 0.9),
-                cy: Math.round(slideHeight * 0.6)
+                cy: Math.round(slideHeight * 0.15)    // Title-sized box
             },
             textData: {
                 paragraphs: [{
                     align: "left",
                     runs: [{ 
                         text: data.text,
-                        style: { fontSize: "14pt", color: "#000000" }
+                        style: { 
+                            fontSize: "16pt",    // Title size
+                            fontWeight: "bold",
+                            color: "#000000" 
+                        }
                     }],
                     level: 0,
                     marL: 0,
                     indent: 0
                 }],
-                verticalAlign: "center"
+                verticalAlign: "flex-start"
             },
             isMaster: false
         };
@@ -1822,12 +1971,21 @@ function renderSlidesToHtml(slides) {
             const heightPx = Math.round(slide.size.cy * scale);
             const backgroundColor = slide.background?.color || "#ffffff";
             
+            console.log(`Rendering slide ${idx} with ${slide.shapes.length} shapes`);
+            
             const shapesHtml = slide.shapes
                 .map((shape) => {
                     const left = Math.round(shape.box.x * scale);
                     const top = Math.round(shape.box.y * scale);
                     const width = Math.round(shape.box.cx * scale);
                     const height = Math.round(shape.box.cy * scale);
+                    
+                    console.log("Rendering shape:", {
+                        type: shape.type,
+                        hasTextData: !!shape.textData,
+                        hasFill: !!shape.fill,
+                        box: { left, top, width, height }
+                    });
                     
                     let bgStyle = '';
                     if (shape.fill) {
@@ -1905,6 +2063,7 @@ function renderSlidesToHtml(slides) {
                     }
                     
                     if (shape.textData) {
+                        console.log(`Rendering text with ${shape.textData.paragraphs.length} paragraphs`);
                         const verticalAlign = shape.textData.verticalAlign || 'center';
                         const textHtml = shape.textData.paragraphs.map(para => {
                             const runHtml = para.runs.map(run => {
