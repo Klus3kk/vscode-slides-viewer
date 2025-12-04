@@ -299,7 +299,7 @@ function extractTextFromShape(shapeNode) {
                     style.fontSize = placeholderType === "title" || placeholderType === "ctrTitle" ? "44pt" : "28pt";
                 }
                 if (!style.fontWeight && (placeholderType === "title" || placeholderType === "ctrTitle")) {
-                    style.fontWeight = "bold";
+                    style.fontWeight = "normal";
                 }
                 
                 const tNodes = Array.from(r.getElementsByTagName("*")).filter((el) => el.localName === "t");
@@ -1148,16 +1148,39 @@ async function renderPptSlides(base64) {
         // Parse the PowerPoint binary format
         const slides = parsePptStream(streamArray, pictures);
 
-        // If we have pictures but no explicit shapes using them, set first picture as background
+        // If we have pictures, apply the first as a background and map the rest to slides
         if (pictures.length > 0) {
-            const bg = pictures[0].dataUrl;
-            slides.forEach((slide) => {
-                slide.shapes.unshift({
-                    type: "image",
-                    box: { x: 0, y: 0, cx: slide.size.cx, cy: slide.size.cy },
-                    src: bg,
-                    isMaster: false
-                });
+            const bg = pictures[0]?.dataUrl || null;
+            slides.forEach((slide, idx) => {
+                const hasImage = slide.shapes.some((s) => s.type === "image" && !s.isMaster);
+                const mappedPic = pictures.length > 1
+                    ? (pictures[idx + 1] || pictures[((idx + 1 - 1) % (pictures.length - 1)) + 1])
+                    : null;
+                const augmented = [];
+                
+                if (bg) {
+                    augmented.push({
+                        type: "image",
+                        box: { x: 0, y: 0, cx: slide.size.cx, cy: slide.size.cy },
+                        src: bg,
+                        isMaster: false
+                    });
+                }
+
+                if (!hasImage && mappedPic && pictures.length > 1) {
+                    const marginX = Math.round(slide.size.cx * 0.08);
+                    const marginY = Math.round(slide.size.cy * 0.25);
+                    const width = Math.round(slide.size.cx * 0.84);
+                    const height = Math.round(slide.size.cy * 0.62);
+                    augmented.push({
+                        type: "image",
+                        box: { x: marginX, y: marginY, cx: width, cy: height },
+                        src: mappedPic.dataUrl,
+                        isMaster: false
+                    });
+                }
+
+                slide.shapes = [...augmented, ...slide.shapes];
             });
         }
         
@@ -1301,8 +1324,8 @@ function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
                 runs: [{ 
                     text: titleText, 
                     style: { 
-                        fontSize: "42pt",
-                        fontWeight: "bold",
+                        fontSize: "38pt",
+                        fontWeight: "normal",
                         color: "#000000" 
                     } 
                 }],
@@ -1328,14 +1351,14 @@ function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
             .filter(Boolean)
             .map((p) => ({
                 align: "left",
-                runs: [{ 
-                    text: p, 
-                    style: { 
-                        fontSize: "16pt",
-                        fontWeight: "normal",
-                        color: "#000000" 
-                    } 
-                }],
+                    runs: [{ 
+                        text: p, 
+                        style: { 
+                            fontSize: "14pt",
+                            fontWeight: "normal",
+                            color: "#000000" 
+                        } 
+                    }],
                 level: 0,
                 marL: 0,
                 indent: 0
@@ -1914,7 +1937,7 @@ function createPptShape(data, slideWidth, slideHeight) {
                         text: data.text,
                         style: { 
                             fontSize: isLikelyTitle ? "40pt" : "18pt",  // Title vs body
-                            fontWeight: isLikelyTitle ? "bold" : "normal",
+                            fontWeight: isLikelyTitle ? "normal" : "normal",
                             color: "#000000" 
                         }
                     }],
