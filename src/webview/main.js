@@ -1096,6 +1096,7 @@ async function renderPptSlides(base64) {
         
         // Parse CFB (Compound File Binary) format
         const cfb = CFB.read(buffer, { type: "array" });
+        const pictures = extractPptPictures(cfb);
         
         // Find PowerPoint Document stream
         const pptStream = findCfbStream(cfb, "PowerPoint Document");
@@ -1107,7 +1108,20 @@ async function renderPptSlides(base64) {
         const streamArray = pptStream instanceof Uint8Array ? pptStream : new Uint8Array(pptStream);
         
         // Parse the PowerPoint binary format
-        const slides = parsePptStream(streamArray);
+        const slides = parsePptStream(streamArray, pictures);
+
+        // If we have pictures but no explicit shapes using them, set first picture as background
+        if (pictures.length > 0) {
+            const bg = pictures[0].dataUrl;
+            slides.forEach((slide) => {
+                slide.shapes.unshift({
+                    type: "image",
+                    box: { x: 0, y: 0, cx: slide.size.cx, cy: slide.size.cy },
+                    src: bg,
+                    isMaster: false
+                });
+            });
+        }
         
         return slides;
     } catch (error) {
@@ -1125,7 +1139,84 @@ function findCfbStream(cfb, name) {
     return null;
 }
 
-function parsePptStream(stream) {
+function extractPptPictures(cfb) {
+    const pics = [];
+    for (const entry of cfb.FileIndex) {
+        const name = entry.name || "";
+        const lower = name.toLowerCase();
+        if (!entry.content) continue;
+        if (!lower.includes("pictures") && !lower.endsWith(".png") && !lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".gif") && !lower.endsWith(".bmp")) {
+            continue;
+        }
+        const bytes = entry.content instanceof Uint8Array ? entry.content : new Uint8Array(entry.content);
+        if (lower.includes("pictures")) {
+            const found = extractImagesFromBlob(bytes, name);
+            pics.push(...found);
+        } else {
+            const mime = guessMimeFromBytes(name, bytes);
+            const dataUrl = `data:${mime};base64,${uint8ToBase64(bytes)}`;
+            pics.push({ name, dataUrl });
+        }
+    }
+    return pics;
+}
+
+function extractImagesFromBlob(bytes, label = "Pictures") {
+    const results = [];
+    const len = bytes.length;
+    const matches = [];
+
+    const sigs = [
+        { name: "jpeg", sig: [0xff, 0xd8, 0xff], end: [0xff, 0xd9], mime: "image/jpeg" },
+        { name: "png", sig: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], end: [0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82], mime: "image/png" },
+        { name: "gif", sig: [0x47, 0x49, 0x46, 0x38], end: [0x00, 0x3b], mime: "image/gif" }
+    ];
+
+    for (let i = 0; i < len; i++) {
+        for (const sig of sigs) {
+            const s = sig.sig;
+            let match = true;
+            for (let k = 0; k < s.length && i + k < len; k++) {
+                if (bytes[i + k] !== s[k]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) continue;
+            // find end
+            let endIdx = -1;
+            const endSig = sig.end;
+            for (let j = i + s.length; j < len - endSig.length; j++) {
+                let ok = true;
+                for (let k = 0; k < endSig.length; k++) {
+                    if (bytes[j + k] !== endSig[k]) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) {
+                    endIdx = j + endSig.length;
+                    break;
+                }
+            }
+            if (endIdx === -1) continue;
+            matches.push({ start: i, end: endIdx, mime: sig.mime });
+        }
+    }
+
+    matches.sort((a, b) => a.start - b.start);
+    for (let idx = 0; idx < matches.length; idx++) {
+        const { start, end, mime } = matches[idx];
+        const slice = bytes.slice(start, end);
+        results.push({
+            name: `${label}-${idx}`,
+            dataUrl: `data:${mime};base64,${uint8ToBase64(slice)}`
+        });
+    }
+    return results;
+}
+
+function parsePptStream(stream, pictures = []) {
     const slides = [];
     let offset = 0;
     let slideWidth = 9144000;
