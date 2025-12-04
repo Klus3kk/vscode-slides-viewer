@@ -1216,6 +1216,69 @@ function extractImagesFromBlob(bytes, label = "Pictures") {
     return results;
 }
 
+function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
+    if (!texts || texts.length === 0) return [];
+
+    const shapes = [];
+    const titleText = texts[0];
+    const bodyTexts = texts.slice(1);
+
+    // Title
+    shapes.push({
+        type: "text",
+        box: {
+            x: Math.round(slideWidthPx * 0.05),
+            y: Math.round(slideHeightPx * 0.11),
+            cx: Math.round(slideWidthPx * 0.9),
+            cy: Math.round(slideHeightPx * 0.13)
+        },
+        textData: {
+            paragraphs: [{
+                align: "left",
+                runs: [{ text: titleText, style: { fontSize: "36pt", fontWeight: "bold", color: "#000000" } }],
+                level: 0,
+                marL: 0,
+                indent: 0
+            }],
+            verticalAlign: "flex-start"
+        },
+        isMaster: false
+    });
+
+    // Body
+    const rawParas = bodyTexts.length ? bodyTexts : [titleText];
+    const paragraphs = rawParas
+        .flatMap((p) => p.split(/\r?\n+/))
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .map((p) => ({
+            align: "left",
+            runs: [{ text: p, style: { fontSize: "20pt", color: "#000000" } }],
+            level: 0,
+            marL: 0,
+            indent: 0
+        }));
+
+    if (paragraphs.length) {
+        shapes.push({
+            type: "text",
+            box: {
+                x: Math.round(slideWidthPx * 0.07),
+                y: Math.round(slideHeightPx * 0.24),
+                cx: Math.round(slideWidthPx * 0.86),
+                cy: Math.round(slideHeightPx * 0.6)
+            },
+            textData: {
+                paragraphs,
+                verticalAlign: "flex-start"
+            },
+            isMaster: false
+        });
+    }
+
+    return shapes;
+}
+
 function parsePptStream(stream, pictures = []) {
     const slides = [];
     let offset = 0;
@@ -1288,31 +1351,12 @@ function parsePptStream(stream, pictures = []) {
     slides.forEach((slide, index) => {
         const texts = textBySlide.get(index);
         if (texts && texts.length > 0) {
-            let hasText = slide.shapes.some(s => s.type === "text" && s.textData);
-            if (!hasText) {
-                const slideWidthPx = slide.size?.cx || 960;
-                const slideHeightPx = slide.size?.cy || 540;
-                slide.shapes.push({
-                    type: "text",
-                    box: { 
-                        x: Math.round(slideWidthPx * 0.1), 
-                        y: Math.round(slideHeightPx * 0.1), 
-                        cx: Math.round(slideWidthPx * 0.8), 
-                        cy: Math.round(slideHeightPx * 0.8) 
-                    },
-                    textData: {
-                        paragraphs: texts.map(text => ({
-                            align: "left",
-                            runs: [{ text, style: { fontSize: "18pt", color: "#000000" } }],
-                            level: 0,
-                            marL: 0,
-                            indent: 0
-                        })),
-                        verticalAlign: "flex-start"
-                    },
-                    isMaster: false
-                });
-            }
+            const slideWidthPx = slide.size?.cx || 960;
+            const slideHeightPx = slide.size?.cy || 540;
+            // Replace existing text shapes with our generated layout for clarity
+            slide.shapes = slide.shapes.filter((s) => s.type !== "text");
+            const generated = buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx);
+            slide.shapes.push(...generated);
         }
     });
     
@@ -1439,26 +1483,7 @@ function parsePptSlide(stream, offset, endOffset, slideWidthPx, slideHeightPx) {
             const texts = parseProgTags(stream, offset, recordEnd);
             console.log("    ProgTags texts:", texts);
             if (texts.length > 0) {
-                shapes.push({
-                    type: "text",
-                    box: { 
-                        x: Math.round(slideWidthPx * 0.1), 
-                        y: Math.round(slideHeightPx * 0.18), 
-                        cx: Math.round(slideWidthPx * 0.8), 
-                        cy: Math.round(slideHeightPx * 0.32) 
-                    },
-                    textData: {
-                        paragraphs: texts.map(text => ({
-                            align: "left",
-                            runs: [{ text, style: { fontSize: "30pt", fontWeight: "bold", color: "#000000" } }],
-                            level: 0,
-                            marL: 0,
-                            indent: 0
-                        })),
-                        verticalAlign: "flex-start"
-                    },
-                    isMaster: false
-                });
+                shapes.push(...buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx));
             }
         }
         // Look for text containers
@@ -1467,26 +1492,7 @@ function parsePptSlide(stream, offset, endOffset, slideWidthPx, slideHeightPx) {
             const texts = parsePptSlideListWithText(stream, offset, recordEnd);
             console.log("    Texts found:", texts);
             if (texts.length > 0) {
-                shapes.push({
-                    type: "text",
-                    box: { 
-                        x: Math.round(slideWidthPx * 0.1), 
-                        y: Math.round(slideHeightPx * 0.18), 
-                        cx: Math.round(slideWidthPx * 0.8), 
-                        cy: Math.round(slideHeightPx * 0.32) 
-                    },
-                    textData: {
-                        paragraphs: texts.map(text => ({
-                            align: "left",
-                            runs: [{ text, style: { fontSize: "30pt", fontWeight: "bold", color: "#000000" } }],
-                            level: 0,
-                            marL: 0,
-                            indent: 0
-                        })),
-                        verticalAlign: "flex-start"
-                    },
-                    isMaster: false
-                });
+                shapes.push(...buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx));
             }
         }
         
@@ -1740,7 +1746,7 @@ function createPptShape(data, slideWidth, slideHeight) {
         
         if (data.text) {
             const minX = Math.round(slideWidth * 0.05);
-            const minY = Math.round(slideHeight * 0.35);
+            const minY = Math.round(slideHeight * 0.12);
             const minH = Math.round(slideHeight * 0.25);
             if (shape.box.x < minX) {
                 const delta = minX - shape.box.x;
@@ -1785,9 +1791,9 @@ function createPptShape(data, slideWidth, slideHeight) {
             type: "text",
             box: {
                 x: Math.round(slideWidth * 0.05),
-                y: Math.round(slideHeight * 0.35),
+                y: Math.round(slideHeight * 0.22),
                 cx: Math.round(slideWidth * 0.9),
-                cy: Math.round(slideHeight * 0.25)
+                cy: Math.round(slideHeight * 0.6)
             },
             textData: {
                 paragraphs: [{
