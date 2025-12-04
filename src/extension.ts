@@ -78,7 +78,8 @@ class PresentationViewerProvider implements vscode.CustomReadonlyEditorProvider<
 
     const assetRoots = [
       vscode.Uri.joinPath(this.context.extensionUri, "src", "webview"),
-      vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "jszip", "dist")
+      vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "jszip", "dist"),
+      vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "cfb", "dist")
     ];
 
     webviewPanel.webview.options = {
@@ -100,7 +101,8 @@ async function openPresentation(filePath: string, context: vscode.ExtensionConte
 
   const assetRoots = [
     vscode.Uri.joinPath(context.extensionUri, "src", "webview"),
-    vscode.Uri.joinPath(context.extensionUri, "node_modules", "jszip", "dist")
+    vscode.Uri.joinPath(context.extensionUri, "node_modules", "jszip", "dist"),
+    vscode.Uri.joinPath(context.extensionUri, "node_modules", "cfb", "dist")
   ];
 
   const panel = vscode.window.createWebviewPanel(
@@ -177,6 +179,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(webviewRoot, "main.js"));
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(webviewRoot, "style.css"));
   const jszipUri = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "node_modules", "jszip", "dist", "jszip.min.js"));
+  const cfbUri = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "node_modules", "cfb", "dist", "cfb.js"));
 
   const rawHtml = fs.readFileSync(htmlPath.fsPath, "utf8");
 
@@ -184,6 +187,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
     .replace(/{{mainScript}}/g, scriptUri.toString())
     .replace(/{{styleSheet}}/g, styleUri.toString())
     .replace(/{{jszip}}/g, jszipUri.toString())
+    .replace(/{{cfb}}/g, cfbUri.toString())
     .replace(/{{cspSource}}/g, webview.cspSource);
 }
 

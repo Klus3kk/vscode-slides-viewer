@@ -1089,6 +1089,635 @@ async function renderOdpSlides(base64) {
     return slides;
 }
 
+// Attempt to render legacy PPT (binary) files via minimal CFB parsing.
+async function renderPptSlides(base64) {
+    try {
+        const buffer = decodeBase64ToUint8(base64);
+        
+        // Parse CFB (Compound File Binary) format
+        const cfb = CFB.read(buffer, { type: "array" });
+        
+        // Find PowerPoint Document stream
+        const pptStream = findCfbStream(cfb, "PowerPoint Document");
+        if (!pptStream) {
+            throw new Error("Not a valid PowerPoint file - PowerPoint Document stream not found");
+        }
+        
+        // Ensure we have a proper Uint8Array
+        const streamArray = pptStream instanceof Uint8Array ? pptStream : new Uint8Array(pptStream);
+        
+        // Parse the PowerPoint binary format
+        const slides = parsePptStream(streamArray);
+        
+        return slides;
+    } catch (error) {
+        console.error("Error in renderPptSlides:", error);
+        throw error;
+    }
+}
+
+function findCfbStream(cfb, name) {
+    for (const entry of cfb.FileIndex) {
+        if (entry.name === name && entry.content) {
+            return entry.content;
+        }
+    }
+    return null;
+}
+
+function parsePptStream(stream) {
+    const slides = [];
+    let offset = 0;
+    let slideWidth = 9144000;
+    let slideHeight = 6858000;
+    const textBySlide = new Map();
+    const shapesBySlide = new Map();
+    
+    console.log("Parsing PPT, stream length:", stream.length);
+    
+    // Parse records
+    while (offset < stream.length - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        if (recordEnd > stream.length) {
+            console.warn(`Record extends beyond stream, stopping`);
+            break;
+        }
+        
+        try {
+            switch (header.recType) {
+                case 0x03E8: // RT_Document
+                    const docResult = parsePptDocument(stream, offset, recordEnd);
+                    if (docResult.width) slideWidth = docResult.width;
+                    if (docResult.height) slideHeight = docResult.height;
+                    break;
+                
+                case 0x03EE: // RT_Slide
+                    try {
+                        const slideWidthPx = Math.max(1, Math.round(slideWidth / 9525));
+                        const slideHeightPx = Math.max(1, Math.round(slideHeight / 9525));
+                        const slideShapes = parsePptSlide(stream, offset, recordEnd, slideWidthPx, slideHeightPx);
+                        shapesBySlide.set(slides.length, slideShapes);
+                        slides.push({
+                            path: `slide${slides.length}`,
+                            size: { cx: slideWidthPx, cy: slideHeightPx },
+                            shapes: slideShapes
+                        });
+                    } catch (slideError) {
+                        console.error("Error parsing slide:", slideError);
+                        const slideWidthPx = Math.max(1, Math.round(slideWidth / 9525));
+                        const slideHeightPx = Math.max(1, Math.round(slideHeight / 9525));
+                        slides.push({
+                            path: `slide${slides.length}`,
+                            size: { cx: slideWidthPx, cy: slideHeightPx },
+                            shapes: []
+                        });
+                    }
+                    break;
+                
+                case 0x0FF0: // RT_SlideListWithText
+                    const slideText = parsePptSlideListWithText(stream, offset, recordEnd);
+                    if (slideText.length > 0) {
+                        textBySlide.set(textBySlide.size, slideText);
+                    }
+                    break;
+            }
+        } catch (e) {
+            console.error(`Error parsing record type 0x${header.recType.toString(16)}:`, e);
+        }
+        
+        offset = recordEnd;
+    }
+    
+    console.log(`Parsed ${slides.length} slides with shapes:`, slides.map(s => s.shapes.length));
+    
+    // Merge text into slides
+    slides.forEach((slide, index) => {
+        const texts = textBySlide.get(index);
+        if (texts && texts.length > 0) {
+            let hasText = slide.shapes.some(s => s.type === "text" && s.textData);
+            if (!hasText) {
+                const slideWidthPx = slide.size?.cx || 960;
+                const slideHeightPx = slide.size?.cy || 540;
+                slide.shapes.push({
+                    type: "text",
+                    box: { 
+                        x: Math.round(slideWidthPx * 0.1), 
+                        y: Math.round(slideHeightPx * 0.1), 
+                        cx: Math.round(slideWidthPx * 0.8), 
+                        cy: Math.round(slideHeightPx * 0.8) 
+                    },
+                    textData: {
+                        paragraphs: texts.map(text => ({
+                            align: "left",
+                            runs: [{ text, style: { fontSize: "18pt", color: "#000000" } }],
+                            level: 0,
+                            marL: 0,
+                            indent: 0
+                        })),
+                        verticalAlign: "flex-start"
+                    },
+                    isMaster: false
+                });
+            }
+        }
+    });
+    
+    return slides;
+}
+
+function readPptRecordHeader(stream, offset) {
+    if (offset + 8 > stream.length) {
+        throw new Error("Unexpected end of stream");
+    }
+    
+    // Create ArrayBuffer from the slice we need
+    const slice = stream.slice(offset, offset + 8);
+    const view = new DataView(slice.buffer, slice.byteOffset, 8);
+    
+    const verAndInstance = view.getUint16(0, true);
+    const recVer = verAndInstance & 0x0F;
+    const recInstance = (verAndInstance >> 4) & 0x0FFF;
+    const recType = view.getUint16(2, true);
+    const recLen = view.getUint32(4, true);
+    
+    return { recVer, recInstance, recType, recLen };
+}
+
+function parsePptDocument(stream, offset, endOffset) {
+    let width = null;
+    let height = null;
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        // Look for environment container (0x03F2)
+        if (header.recType === 0x03F2) {
+            const envResult = parsePptEnvironment(stream, offset, recordEnd);
+            if (envResult.width) width = envResult.width;
+            if (envResult.height) height = envResult.height;
+        }
+        
+        offset = recordEnd;
+    }
+    
+    return { width, height };
+}
+
+function parsePptEnvironment(stream, offset, endOffset) {
+    let width = null;
+    let height = null;
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        // Slide size atom (0x03F4)
+        if (header.recType === 0x03F4 && header.recLen >= 8) {
+            const slice = stream.slice(offset, offset + 8);
+            const view = new DataView(slice.buffer, slice.byteOffset, 8);
+            width = view.getInt32(0, true);
+            height = view.getInt32(4, true);
+        }
+        
+        offset = recordEnd;
+    }
+    
+    return { width, height };
+}
+
+function parseProgTags(stream, offset, endOffset) {
+    const texts = [];
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        // Safety check
+        if (recordEnd > endOffset || recordEnd > stream.length) {
+            console.warn("ProgTags record extends beyond container, skipping");
+            break;
+        }
+        
+        // Look for text atoms in ProgTags
+        if (header.recType === 0x0FA0) { // TextCharsAtom
+            texts.push(readPptTextChars(stream, offset, header.recLen));
+        } else if (header.recType === 0x0FA8) { // TextBytesAtom
+            texts.push(readPptTextBytes(stream, offset, header.recLen));
+        }
+        // Recurse into container records only (recVer & 0xF === 0xF)
+        else if (header.recVer === 0xF && header.recLen > 0) {
+            const nested = parseProgTags(stream, offset, recordEnd);
+            texts.push(...nested);
+        }
+        
+        offset = recordEnd;
+    }
+    
+    return texts;
+}
+
+function parsePptSlide(stream, offset, endOffset, slideWidthPx, slideHeightPx) {
+    const shapes = [];
+    
+    console.log(`  Parsing slide from ${offset} to ${endOffset}`);
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        console.log(`    Slide sub-record: type=0x${header.recType.toString(16)}, len=${header.recLen}`);
+        
+        // PPDrawing container (0x040C)
+        if (header.recType === 0x040C) {
+            console.log("    Found PPDrawing");
+            const drawingShapes = parsePptDrawing(stream, offset, recordEnd, slideWidthPx, slideHeightPx);
+            console.log("    Drawing shapes:", drawingShapes);
+            shapes.push(...drawingShapes);
+        }
+        // ProgTags container (0x1388) - may contain text
+        else if (header.recType === 0x1388) {
+            console.log("    Found ProgTags - parsing for text");
+            const texts = parseProgTags(stream, offset, recordEnd);
+            console.log("    ProgTags texts:", texts);
+            if (texts.length > 0) {
+                shapes.push({
+                    type: "text",
+                    box: { 
+                        x: Math.round(slideWidthPx * 0.1), 
+                        y: Math.round(slideHeightPx * 0.18), 
+                        cx: Math.round(slideWidthPx * 0.8), 
+                        cy: Math.round(slideHeightPx * 0.32) 
+                    },
+                    textData: {
+                        paragraphs: texts.map(text => ({
+                            align: "left",
+                            runs: [{ text, style: { fontSize: "30pt", fontWeight: "bold", color: "#000000" } }],
+                            level: 0,
+                            marL: 0,
+                            indent: 0
+                        })),
+                        verticalAlign: "flex-start"
+                    },
+                    isMaster: false
+                });
+            }
+        }
+        // Look for text containers
+        else if (header.recType === 0x0FF0) { // RT_SlideListWithText
+            console.log("    Found text container in slide");
+            const texts = parsePptSlideListWithText(stream, offset, recordEnd);
+            console.log("    Texts found:", texts);
+            if (texts.length > 0) {
+                shapes.push({
+                    type: "text",
+                    box: { 
+                        x: Math.round(slideWidthPx * 0.1), 
+                        y: Math.round(slideHeightPx * 0.18), 
+                        cx: Math.round(slideWidthPx * 0.8), 
+                        cy: Math.round(slideHeightPx * 0.32) 
+                    },
+                    textData: {
+                        paragraphs: texts.map(text => ({
+                            align: "left",
+                            runs: [{ text, style: { fontSize: "30pt", fontWeight: "bold", color: "#000000" } }],
+                            level: 0,
+                            marL: 0,
+                            indent: 0
+                        })),
+                        verticalAlign: "flex-start"
+                    },
+                    isMaster: false
+                });
+            }
+        }
+        
+        offset = recordEnd;
+    }
+    
+    console.log(`  Total shapes extracted: ${shapes.length}`);
+    return shapes;
+}
+
+function parsePptDrawing(stream, offset, endOffset, slideWidth, slideHeight) {
+    const shapes = [];
+    
+    console.log(`      Parsing drawing from ${offset} to ${endOffset}`);
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        console.log(`        Drawing record: type=0x${header.recType.toString(16)}, len=${header.recLen}`);
+        
+        // OfficeArt containers: 0xF002 (SpgrContainer), 0xF003 (group), 0xF004 (shape)
+        if (header.recType === 0xF002 || header.recType === 0xF003 || header.recType === 0xF004) {
+            console.log(`        Found shape container 0x${header.recType.toString(16)}`);
+            const containerShapes = parsePptShapeContainer(stream, offset, recordEnd, slideWidth, slideHeight);
+            console.log("        Container shapes:", containerShapes);
+            shapes.push(...containerShapes);
+        }
+        // Also check for direct OfficeArt containers
+        else if (header.recType === 0xF000) { // OfficeArtDggContainer
+            console.log("        Found OfficeArtDggContainer");
+        }
+        
+        offset = recordEnd;
+    }
+    
+    console.log(`      Drawing extracted ${shapes.length} shapes`);
+    return shapes;
+}
+
+function parsePptShapeProperties(stream, offset, length) {
+    const props = { bounds: {} };
+    const numProps = Math.floor(length / 6);
+    
+    for (let i = 0; i < numProps && offset + i * 6 + 6 <= stream.length; i++) {
+        const propOffset = offset + i * 6;
+        const slice = stream.slice(propOffset, propOffset + 6);
+        const view = new DataView(slice.buffer, slice.byteOffset, 6);
+        const propId = view.getUint16(0, true);
+        const propValue = view.getUint32(2, true);
+        
+        // Shape bounds
+        if (propId === 0x0004) props.bounds.left = propValue;
+        else if (propId === 0x0005) props.bounds.top = propValue;
+        else if (propId === 0x0006) props.bounds.right = propValue;
+        else if (propId === 0x0007) props.bounds.bottom = propValue;
+        // Fill color
+        else if (propId === 0x0181) {
+            props.fillColor = pptColorFromInt(propValue);
+        }
+        // Fill type
+        else if (propId === 0x0180) {
+            props.fillType = propValue;
+        }
+    }
+    
+    return props;
+}
+
+function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeight) {
+    const shapes = [];
+    const shapeData = {};
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        if (recordEnd > endOffset) break;
+        
+        try {
+            // OfficeArtFOPT - shape formatting (0xF00B)
+            if (header.recType === 0xF00B) {
+                const props = parsePptShapeProperties(stream, offset, header.recLen);
+                Object.assign(shapeData, props);
+            }
+            // OfficeArtClientTextbox (0xF00D)
+            else if (header.recType === 0xF00D) {
+                const text = parsePptClientTextbox(stream, offset, recordEnd);
+                if (text) shapeData.text = text;
+            }
+            // OfficeArtClientData (0xF011) - may contain image references
+            else if (header.recType === 0xF011) {
+                // Try to extract image data
+                const imageData = parsePptClientData(stream, offset, recordEnd);
+                if (imageData) {
+                    Object.assign(shapeData, imageData);
+                }
+            }
+            // Nested shape containers (0xF002, 0xF003, 0xF004)
+            else if (header.recType === 0xF002 || header.recType === 0xF003 || header.recType === 0xF004) {
+                const nested = parsePptShapeContainer(stream, offset, recordEnd, slideWidth, slideHeight);
+                shapes.push(...nested);
+                // Reset shapeData after processing nested container
+                Object.keys(shapeData).forEach(key => delete shapeData[key]);
+            }
+        } catch (e) {
+            console.error(`Error in shape container:`, e);
+        }
+        
+        offset = recordEnd;
+    }
+    
+    // Create shape if we have bounds or text (text will use a fallback box)
+    if ((shapeData.bounds && (shapeData.bounds.left !== undefined || shapeData.bounds.right !== undefined)) || shapeData.text) {
+        const shape = createPptShape(shapeData, slideWidth, slideHeight);
+        if (shape) {
+            shapes.push(shape);
+        }
+    }
+    
+    return shapes;
+}
+
+function parsePptClientData(stream, offset, endOffset) {
+    // This is a placeholder for now (it's pretty complex to extract images properly from PPT [so RE is needed, probably, definitely])
+    return null;
+}
+
+
+function parsePptShapeProperties(stream, offset, length) {
+    const props = { bounds: {} };
+    const numProps = Math.floor(length / 6);
+    
+    for (let i = 0; i < numProps && offset + i * 6 + 6 <= stream.length; i++) {
+        const propOffset = offset + i * 6;
+        const view = new DataView(stream.buffer, propOffset, 6);
+        const propId = view.getUint16(0, true);
+        const propValue = view.getUint32(2, true);
+        
+        // Shape bounds
+        if (propId === 0x0004) props.bounds.left = propValue;
+        else if (propId === 0x0005) props.bounds.top = propValue;
+        else if (propId === 0x0006) props.bounds.right = propValue;
+        else if (propId === 0x0007) props.bounds.bottom = propValue;
+        // Fill color
+        else if (propId === 0x0181) {
+            props.fillColor = pptColorFromInt(propValue);
+        }
+        // Fill type
+        else if (propId === 0x0180) {
+            props.fillType = propValue;
+        }
+    }
+    
+    return props;
+}
+
+function parsePptClientTextbox(stream, offset, endOffset) {
+    const texts = [];
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        if (recordEnd > endOffset) break;
+        
+        // TextCharsAtom (0x0FA0) - Unicode text
+        if (header.recType === 0x0FA0) {
+            const text = readPptTextChars(stream, offset, header.recLen);
+            if (text.trim()) texts.push(text);
+        }
+        // TextBytesAtom (0x0FA8) - ANSI text
+        else if (header.recType === 0x0FA8) {
+            const text = readPptTextBytes(stream, offset, header.recLen);
+            if (text.trim()) texts.push(text);
+        }
+        
+        offset = recordEnd;
+    }
+    
+    // Join all text fragments with a space instead of newline
+    return texts.length > 0 ? texts.join(" ") : null;
+}
+
+function parsePptSlideListWithText(stream, offset, endOffset) {
+    const texts = [];
+    
+    while (offset < endOffset - 8) {
+        const header = readPptRecordHeader(stream, offset);
+        offset += 8;
+        const recordEnd = offset + header.recLen;
+        
+        // TextCharsAtom
+        if (header.recType === 0x0FA0) {
+            texts.push(readPptTextChars(stream, offset, header.recLen));
+        }
+        // TextBytesAtom
+        else if (header.recType === 0x0FA8) {
+            texts.push(readPptTextBytes(stream, offset, header.recLen));
+        }
+        
+        offset = recordEnd;
+    }
+    
+    return texts;
+}
+
+function readPptTextChars(stream, offset, length) {
+    const chars = [];
+    for (let i = 0; i < length && offset + i + 1 < stream.length; i += 2) {
+        const charCode = stream[offset + i] | (stream[offset + i + 1] << 8);
+        if (charCode !== 0) chars.push(String.fromCharCode(charCode));
+    }
+    return chars.join("");
+}
+
+function readPptTextBytes(stream, offset, length) {
+    const decoder = new TextDecoder("windows-1252");
+    const bytes = stream.slice(offset, offset + length);
+    return decoder.decode(bytes);
+}
+
+function pptColorFromInt(colorInt) {
+    const r = colorInt & 0xFF;
+    const g = (colorInt >> 8) & 0xFF;
+    const b = (colorInt >> 16) & 0xFF;
+    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+
+function createPptShape(data, slideWidth, slideHeight) {
+    if (!data.bounds && !data.text) return null;
+    
+    const emusToPixels = (emus) => Math.round(emus / 9525);
+    
+    // If we have bounds, use them (convert EMUs -> px), otherwise fallback
+    if (data.bounds && data.bounds.left !== undefined) {
+        const { left = 0, top = 0, right = slideWidth * 9525, bottom = slideHeight * 9525 } = data.bounds;
+        const shape = {
+            type: data.text ? "text" : "shape",
+            box: {
+                x: emusToPixels(left),
+                y: emusToPixels(top),
+                cx: emusToPixels(right - left),
+                cy: emusToPixels(bottom - top)
+            },
+            isMaster: false
+        };
+        
+        if (data.text) {
+            const minX = Math.round(slideWidth * 0.05);
+            const minY = Math.round(slideHeight * 0.35);
+            const minH = Math.round(slideHeight * 0.25);
+            if (shape.box.x < minX) {
+                const delta = minX - shape.box.x;
+                shape.box.x = minX;
+                shape.box.cx = Math.max(10, shape.box.cx - delta);
+            }
+            if (shape.box.y < minY) {
+                const delta = minY - shape.box.y;
+                shape.box.y = minY;
+                shape.box.cy = Math.max(10, shape.box.cy - delta);
+            }
+            if (shape.box.cy < minH) {
+                shape.box.cy = minH;
+            }
+        }
+        
+        if (data.fillColor && data.fillType !== 0) {
+            shape.fill = { type: "solid", color: data.fillColor };
+        }
+        
+        if (data.text) {
+            shape.textData = {
+                paragraphs: [{
+                    align: "left",
+                    runs: [{ 
+                        text: data.text,
+                        style: { fontSize: "14pt", color: "#000000" }
+                    }],
+                    level: 0,
+                    marL: 0,
+                    indent: 0
+                }],
+                verticalAlign: "center"
+            };
+        }
+        
+        return shape;
+    }
+    
+    if (data.text) {
+        return {
+            type: "text",
+            box: {
+                x: Math.round(slideWidth * 0.05),
+                y: Math.round(slideHeight * 0.35),
+                cx: Math.round(slideWidth * 0.9),
+                cy: Math.round(slideHeight * 0.25)
+            },
+            textData: {
+                paragraphs: [{
+                    align: "left",
+                    runs: [{ 
+                        text: data.text,
+                        style: { fontSize: "14pt", color: "#000000" }
+                    }],
+                    level: 0,
+                    marL: 0,
+                    indent: 0
+                }],
+                verticalAlign: "center"
+            },
+            isMaster: false
+        };
+    }
+    
+    return null;
+}
+
 function renderSlidesToHtml(slides) {
     return slides
         .map((slide, idx) => {
@@ -1255,6 +1884,22 @@ window.addEventListener("message", async (event) => {
                 updateSlideVisibility();
                 applyZoom();
                 updatePageInfo();
+            } else if (lowerName.endsWith(".ppt")) {
+                const slides = await renderPptSlides(msg.base64);
+                slidesCache = slides;
+
+                if (slides.length === 0) {
+                    slidesContent.innerHTML = "<p>No slides found.</p>";
+                    slidesEl.classList.remove("hidden");
+                    return;
+                }
+
+                slidesContent.innerHTML = renderSlidesToHtml(slides);
+                slidesEl.classList.remove("hidden");
+                currentSlide = 0;
+                updateSlideVisibility();
+                applyZoom();
+                updatePageInfo();
             } else if (lowerName.endsWith(".odp")) {
                 const slides = await renderOdpSlides(msg.base64);
                 slidesCache = slides;
@@ -1272,11 +1917,12 @@ window.addEventListener("message", async (event) => {
                 applyZoom();
                 updatePageInfo();
             } else {
-                slidesContent.innerHTML = `<p>Preview for ${lowerName} not implemented. Currently PPTX only.</p>`;
+                slidesContent.innerHTML = `<p>Preview for ${lowerName} not implemented.</p>`;
                 slidesEl.classList.remove("hidden");
             }
         } catch (err) {
-            slidesContent.innerHTML = `<p>Error loading presentation.</p>`;
+            console.error("Error loading presentation:", err);
+            slidesContent.innerHTML = `<p>Error loading presentation: ${err.message}</p>`;
             slidesEl.classList.remove("hidden");
         }
     }
