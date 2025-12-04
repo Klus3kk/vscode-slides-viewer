@@ -64,16 +64,25 @@
         "viewType": "presentationViewer.viewer",
         "displayName": "Presentation Viewer",
         "selector": [
-          { "filenamePattern": "*.pptx" },
-          { "filenamePattern": "*.ppt" },
-          { "filenamePattern": "*.odp" },
-          { "filenamePattern": "*.key" }
+          {
+            "filenamePattern": "*.pptx"
+          },
+          {
+            "filenamePattern": "*.ppt"
+          },
+          {
+            "filenamePattern": "*.odp"
+          },
+          {
+            "filenamePattern": "*.key"
+          }
         ],
         "priority": "default"
       }
     ]
   },
   "dependencies": {
+    "cfb": "^1.2.2",
     "jszip": "^3.10.1"
   },
   "devDependencies": {
