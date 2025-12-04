@@ -729,6 +729,11 @@ function guessMimeFromBytes(path, bytes) {
     return "image/png";
 }
 
+function extractTrailingNumber(str) {
+    const match = str.match(/(\d+)(?!.*\d)/);
+    return match ? parseInt(match[1], 10) : 0;
+}
+
 function uint8ToBase64(bytes) {
     let binary = "";
     for (let i = 0; i < bytes.length; i += 1) {
@@ -1129,6 +1134,61 @@ async function renderOdpSlides(base64) {
     }
 
     return slides;
+}
+
+// Minimal Keynote (.key) support: render from embedded preview images if present.
+async function renderKeySlides(base64) {
+    try {
+        const buffer = decodeBase64ToUint8(base64);
+        const zip = await JSZip.loadAsync(buffer);
+        const fileNames = Object.keys(zip.files);
+        const previews = fileNames.filter((name) => {
+            const lower = name.toLowerCase();
+            return (
+                (lower.includes("preview/") || lower.includes("previews/") || lower.startsWith("preview")) &&
+                (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))
+            );
+        });
+
+        if (previews.length === 0) {
+            return [];
+        }
+
+        const sorted = previews.sort((a, b) => {
+            const na = extractTrailingNumber(a);
+            const nb = extractTrailingNumber(b);
+            if (na === nb) return a.localeCompare(b);
+            return na - nb;
+        });
+
+        const slides = [];
+        for (const name of sorted.slice(0, MAX_SLIDES)) {
+            const file = zip.file(name);
+            if (!file) continue;
+            const bytes = await file.async("uint8array");
+            const mime = guessMimeFromBytes(name, bytes);
+            const dataUrl = `data:${mime};base64,${uint8ToBase64(bytes)}`;
+            const size = { cx: 1280, cy: 720 };
+            slides.push({
+                path: name,
+                size,
+                shapes: [
+                    {
+                        type: "image",
+                        box: { x: 0, y: 0, cx: size.cx, cy: size.cy },
+                        src: dataUrl,
+                        mime,
+                        isMaster: false
+                    }
+                ]
+            });
+        }
+
+        return slides;
+    } catch (e) {
+        console.error("Error rendering .key:", e);
+        return [];
+    }
 }
 
 // Attempt to render legacy PPT (binary) files via minimal CFB parsing.
@@ -1954,6 +2014,15 @@ function pptColorFromInt(colorInt) {
     return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
+function guessVectorPlaceholderLabel(shape) {
+    const src = shape.src || "";
+    const name = (shape.name || "").toLowerCase();
+    const text = `${src} ${name}`.toLowerCase();
+    if (text.includes("chart") || text.includes("graph")) return "Chart image (EMF/WMF not viewable in browser)";
+    if (text.includes("table") || text.includes("grid")) return "Table image (EMF/WMF not viewable in browser)";
+    return "Embedded EMF/WMF not viewable in browser";
+}
+
 function createPptShape(data, slideWidth, slideHeight) {
     if (!data.bounds && !data.text) return null;
     
@@ -2087,6 +2156,12 @@ function renderSlidesToHtml(slides) {
                     }
 
                     if (shape.type === "image") {
+                        const isEmf = (shape.mime || "").includes("emf") || (shape.src || "").includes("image/emf");
+                        const isWmf = (shape.mime || "").includes("wmf") || (shape.src || "").includes("image/wmf");
+                        if (isEmf || isWmf) {
+                            const label = guessVectorPlaceholderLabel(shape);
+                            return `<div class="shape image-shape unsupported" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;border:1px dashed #666;display:flex;align-items:center;justify-content:center;color:#444;font-size:12px;background:linear-gradient(135deg, rgba(0,0,0,0.03), rgba(0,0,0,0.07));text-align:center;padding:4px;box-sizing:border-box;">${escapeHtml(label)}</div>`;
+                        }
                         return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;" src="${shape.src}" alt="" />`;
                     }
 
@@ -2242,6 +2317,22 @@ window.addEventListener("message", async (event) => {
 
                 if (slides.length === 0) {
                     slidesContent.innerHTML = "<p>No slides found.</p>";
+                    slidesEl.classList.remove("hidden");
+                    return;
+                }
+
+                slidesContent.innerHTML = renderSlidesToHtml(slides);
+                slidesEl.classList.remove("hidden");
+                currentSlide = 0;
+                updateSlideVisibility();
+                applyZoom();
+                updatePageInfo();
+            } else if (lowerName.endsWith(".key")) {
+                const slides = await renderKeySlides(msg.base64);
+                slidesCache = slides;
+
+                if (slides.length === 0) {
+                    slidesContent.innerHTML = "<p>No preview images found in .key file.</p>";
                     slidesEl.classList.remove("hidden");
                     return;
                 }
