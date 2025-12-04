@@ -3,6 +3,7 @@ node_modules/
 .vscode/
 dist/
 Configurations2/
+KeyConf/
 
 # Files
 package-lock.json

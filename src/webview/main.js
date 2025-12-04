@@ -1141,66 +1141,99 @@ async function renderKeySlides(base64) {
     try {
         const buffer = decodeBase64ToUint8(base64);
         const zip = await JSZip.loadAsync(buffer);
-        const fileNames = Object.keys(zip.files);
-        const previews = [];
-
-        // Prefer thumbs/st*.jpg (Keynote slide thumbnails)
-        for (const name of fileNames) {
-            const lower = name.toLowerCase();
-            if (!lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".png")) continue;
-            if (lower.includes("thumbs/") && /st\d+/i.test(lower)) {
-                previews.push({ name, order: extractTrailingNumber(lower) });
-            }
-        }
-        // Fallback to any previews folder images
-        if (previews.length === 0) {
-            for (const name of fileNames) {
-                const lower = name.toLowerCase();
-                if (!lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".png")) continue;
-                if (lower.includes("preview/") || lower.includes("previews/") || lower.startsWith("preview")) {
-                    previews.push({ name, order: extractTrailingNumber(lower) });
-                }
-            }
-        }
-        // QuickLook/Thumbnail as last resort (single slide)
-        if (previews.length === 0) {
-            for (const name of fileNames) {
-                const lower = name.toLowerCase();
-                if (lower.includes("quicklook/thumbnail") && (lower.endsWith(".jpg") || lower.endsWith(".png"))) {
-                    previews.push({ name, order: 0 });
-                }
-            }
-        }
-
-        if (previews.length === 0) {
-            return [];
-        }
-
-        const sorted = previews
-            .sort((a, b) => (a.order === b.order ? a.name.localeCompare(b.name) : a.order - b.order))
-            .map((p) => p.name);
-
         const slides = [];
-        for (const name of sorted.slice(0, MAX_SLIDES)) {
+        const fileNames = Object.keys(zip.files);
+
+        const loadImageSlide = async (name, fallbackSize = { cx: 1280, cy: 720 }) => {
             const file = zip.file(name);
-            if (!file) continue;
+            if (!file) return null;
             const bytes = await file.async("uint8array");
             const mime = guessMimeFromBytes(name, bytes);
+            const dims = getImageDimensions(bytes, mime) || fallbackSize;
             const dataUrl = `data:${mime};base64,${uint8ToBase64(bytes)}`;
-            const size = { cx: 1280, cy: 720 };
-            slides.push({
+            return {
                 path: name,
-                size,
+                size: dims,
                 shapes: [
                     {
                         type: "image",
-                        box: { x: 0, y: 0, cx: size.cx, cy: size.cy },
+                        box: { x: 0, y: 0, cx: dims.cx, cy: dims.cy },
                         src: dataUrl,
                         mime,
                         isMaster: false
                     }
                 ]
+            };
+        };
+
+        // 1) Use index.apxl thumbnails if available
+        const indexXml = await zip.file("index.apxl")?.async("text");
+        if (indexXml) {
+            const doc = parseXml(indexXml);
+            if (doc) {
+                let defaultSize = { cx: 1280, cy: 720 };
+                const sizeEl = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "size");
+                const wAttr = sizeEl?.getAttribute("sfa:w");
+                const hAttr = sizeEl?.getAttribute("sfa:h");
+                if (wAttr && hAttr) {
+                    const w = parseFloat(wAttr);
+                    const h = parseFloat(hAttr);
+                    if (w > 0 && h > 0) defaultSize = { cx: Math.round(w), cy: Math.round(h) };
+                }
+
+                const slideNodes = Array.from(doc.getElementsByTagName("*")).filter((el) => el.localName === "slide");
+                for (const slideEl of slideNodes) {
+                    const dataEl = Array.from(slideEl.getElementsByTagName("*")).find((el) => el.localName === "data");
+                    const thumbPath = dataEl?.getAttribute("sf:path") || dataEl?.getAttribute("sf:displayname");
+                    if (!thumbPath) continue;
+
+                    const normalized = thumbPath.replace(/^\.?\//, "");
+                    const candidateNames = [normalized, thumbPath];
+                    let slideObj = null;
+                    for (const cand of candidateNames) {
+                        slideObj = await loadImageSlide(cand, defaultSize);
+                        if (slideObj) break;
+                    }
+                    if (slideObj) {
+                        slides.push(slideObj);
+                        if (slides.length >= MAX_SLIDES) break;
+                    }
+                }
+            }
+        }
+
+        // 2) Fallback to thumbs/st*.*
+        if (slides.length === 0) {
+            const thumbCandidates = fileNames.filter((name) => {
+                const lower = name.toLowerCase();
+                return (
+                    lower.includes("thumbs/") &&
+                    /st\d+/i.test(lower) &&
+                    !zip.files[name].dir &&
+                    (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))
+                );
             });
+            thumbCandidates.sort((a, b) => extractTrailingNumber(a) - extractTrailingNumber(b));
+
+            for (const name of thumbCandidates.slice(0, MAX_SLIDES)) {
+                const slideObj = await loadImageSlide(name);
+                if (slideObj) slides.push(slideObj);
+            }
+        }
+
+        // 3) Fallback to QuickLook thumbnail
+        if (slides.length === 0) {
+            for (const name of fileNames) {
+                const lower = name.toLowerCase();
+                if (zip.files[name].dir) continue;
+                if (!lower.includes("quicklook/thumbnail")) continue;
+                if (!lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".png")) continue;
+                const slideObj = await loadImageSlide(name);
+                if (slideObj) {
+                    slides.push(slideObj);
+                    break;
+                }
+            }
         }
 
         return slides;
