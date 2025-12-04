@@ -206,7 +206,7 @@ function parseRPrStyle(rPr) {
     if (!rPr) return style;
 
     const sz = rPr.getAttribute("sz");
-    if (sz) style.fontSize = `${parseInt(sz, 10) / 100}pt`;
+    if (sz) style.fontSize = `${parseInt(sz, 10) / 130}pt`; // to change pptx font size 
 
     const b = rPr.getAttribute("b");
     if (b === "1") style.fontWeight = "bold";
@@ -712,7 +712,9 @@ function guessMimeFromBytes(path, bytes) {
         bmp: "image/bmp",
         svg: "image/svg+xml",
         webp: "image/webp",
-        avif: "image/avif"
+        avif: "image/avif",
+        emf: "image/emf",
+        wmf: "image/wmf"
     };
     if (ext && mimeTypes[ext]) return mimeTypes[ext];
     if (bytes.length > 4) {
@@ -721,6 +723,8 @@ function guessMimeFromBytes(path, bytes) {
         if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
         if (bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
         if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return "image/webp";
+        if (bytes[0] === 0x01 && bytes[1] === 0x00 && bytes[2] === 0x00 && bytes[3] === 0x00) return "image/emf";
+        if (bytes[0] === 0xd7 && bytes[1] === 0xcd && bytes[2] === 0xc6 && bytes[3] === 0x9a) return "image/wmf";
     }
     return "image/png";
 }
@@ -1148,26 +1152,28 @@ async function renderPptSlides(base64) {
         // Parse the PowerPoint binary format
         const slides = parsePptStream(streamArray, pictures);
 
-        // If we have pictures, apply the first as a background and map the rest to slides
+        // If we have pictures, prefer raster images browsers can show. Use first raster as background,
+        // then map remaining raster images to slides when the slide lacks a renderable image (e.g., only EMF).
         if (pictures.length > 0) {
-            const bg = pictures[0]?.dataUrl || null;
+            const rasterPics = pictures.filter((p) => isBrowserRenderableImage(p.mime || ""));
+            const bgPic = rasterPics[0] || null;
             slides.forEach((slide, idx) => {
-                const hasImage = slide.shapes.some((s) => s.type === "image" && !s.isMaster);
-                const mappedPic = pictures.length > 1
-                    ? (pictures[idx + 1] || pictures[((idx + 1 - 1) % (pictures.length - 1)) + 1])
+                const hasRenderableImage = slide.shapes.some((s) => shapeHasRenderableImage(s));
+                const mappedPic = rasterPics.length > 1
+                    ? (rasterPics[idx + 1] || rasterPics[1 + (idx % (rasterPics.length - 1))])
                     : null;
                 const augmented = [];
-                
-                if (bg) {
+
+                if (bgPic) {
                     augmented.push({
                         type: "image",
                         box: { x: 0, y: 0, cx: slide.size.cx, cy: slide.size.cy },
-                        src: bg,
+                        src: bgPic.dataUrl,
                         isMaster: false
                     });
                 }
 
-                if (!hasImage && mappedPic && pictures.length > 1) {
+                if (!hasRenderableImage && mappedPic) {
                     const marginX = Math.round(slide.size.cx * 0.08);
                     const marginY = Math.round(slide.size.cy * 0.25);
                     const width = Math.round(slide.size.cx * 0.84);
@@ -1206,7 +1212,16 @@ function extractPptPictures(cfb) {
         const name = entry.name || "";
         const lower = name.toLowerCase();
         if (!entry.content) continue;
-        if (!lower.includes("pictures") && !lower.endsWith(".png") && !lower.endsWith(".jpg") && !lower.endsWith(".jpeg") && !lower.endsWith(".gif") && !lower.endsWith(".bmp")) {
+        if (
+            !lower.includes("pictures") &&
+            !lower.endsWith(".png") &&
+            !lower.endsWith(".jpg") &&
+            !lower.endsWith(".jpeg") &&
+            !lower.endsWith(".gif") &&
+            !lower.endsWith(".bmp") &&
+            !lower.endsWith(".emf") &&
+            !lower.endsWith(".wmf")
+        ) {
             continue;
         }
         const bytes = entry.content instanceof Uint8Array ? entry.content : new Uint8Array(entry.content);
@@ -1216,10 +1231,27 @@ function extractPptPictures(cfb) {
         } else {
             const mime = guessMimeFromBytes(name, bytes);
             const dataUrl = `data:${mime};base64,${uint8ToBase64(bytes)}`;
-            pics.push({ name, dataUrl });
+            pics.push({ name, dataUrl, mime });
         }
     }
     return pics;
+}
+
+function isBrowserRenderableImage(mime) {
+    return [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/bmp",
+        "image/webp",
+        "image/avif"
+    ].includes(mime);
+}
+
+function shapeHasRenderableImage(shape) {
+    if (shape.type !== "image" || !shape.src) return false;
+    // quick sniff from data URL
+    return /^data:image\/(png|jpe?g|gif|bmp|webp|avif)/i.test(shape.src);
 }
 
 function extractImagesFromBlob(bytes, label = "Pictures") {
@@ -1234,6 +1266,16 @@ function extractImagesFromBlob(bytes, label = "Pictures") {
     ];
 
     for (let i = 0; i < len; i++) {
+        // EMF: header Type=1 (DWORD) then Size (DWORD). We use size for slicing.
+        if (i + 12 < len && bytes[i] === 0x01 && bytes[i + 1] === 0x00 && bytes[i + 2] === 0x00 && bytes[i + 3] === 0x00) {
+            const size = bytes[i + 4] | (bytes[i + 5] << 8) | (bytes[i + 6] << 16) | (bytes[i + 7] << 24);
+            if (size > 0 && i + size <= len) {
+                matches.push({ start: i, end: i + size, mime: "image/emf" });
+                i += size - 1;
+                continue;
+            }
+        }
+
         for (const sig of sigs) {
             const s = sig.sig;
             let match = true;
@@ -1271,7 +1313,8 @@ function extractImagesFromBlob(bytes, label = "Pictures") {
         const slice = bytes.slice(start, end);
         results.push({
             name: `${label}-${idx}`,
-            dataUrl: `data:${mime};base64,${uint8ToBase64(slice)}`
+            dataUrl: `data:${mime};base64,${uint8ToBase64(slice)}`,
+            mime
         });
     }
     return results;
@@ -1734,6 +1777,13 @@ function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeig
                     shapeData.text = text;
                 }
             }
+            // OfficeArtBlip records (embedded picture data) 0xF01A - 0xF020
+            else if (header.recType >= 0xF01A && header.recType <= 0xF020) {
+                const blob = stream.slice(offset, recordEnd);
+                const mime = guessMimeFromBytes(`blip-${header.recType.toString(16)}`, blob);
+                shapeData.image = { dataUrl: `data:${mime};base64,${uint8ToBase64(blob)}`, mime };
+                console.log("          Found blip image, mime:", mime);
+            }
             // OfficeArtClientData (0xF011)
             else if (header.recType === 0xF011) {
                 console.log("          Found ClientData (possibly image)");
@@ -1741,10 +1791,11 @@ function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeig
             // Nested shape containers (0xF002, 0xF003, 0xF004)
             else if (header.recType === 0xF002 || header.recType === 0xF003 || header.recType === 0xF004) {
                 // CRITICAL FIX: Before recursing, save current shape if it has data
-                if (shapeData.bounds || shapeData.text) {
+                if (shapeData.bounds || shapeData.text || shapeData.image) {
                     console.log(`        Creating shape before recursion:`, {
                         hasBounds: !!shapeData.bounds,
                         hasText: !!shapeData.text,
+                        hasImage: !!shapeData.image,
                         text: shapeData.text ? shapeData.text.substring(0, 30) : null
                     });
                     const shape = createPptShape(shapeData, slideWidth, slideHeight);
@@ -1767,10 +1818,11 @@ function parsePptShapeContainer(stream, offset, endOffset, slideWidth, slideHeig
     }
     
     // Create shape if we have remaining data at the end
-    if (shapeData.bounds || shapeData.text) {
+    if (shapeData.bounds || shapeData.text || shapeData.image) {
         console.log(`        Creating final shape:`, {
             hasBounds: !!shapeData.bounds,
             hasText: !!shapeData.text,
+            hasImage: !!shapeData.image,
             text: shapeData.text ? shapeData.text.substring(0, 30) : null
         });
         const shape = createPptShape(shapeData, slideWidth, slideHeight);
@@ -1911,7 +1963,7 @@ function createPptShape(data, slideWidth, slideHeight) {
     if (data.bounds && data.bounds.left !== undefined) {
         const { left = 0, top = 0, right = slideWidth * 9525, bottom = slideHeight * 9525 } = data.bounds;
         const shape = {
-            type: data.text ? "text" : "shape",
+            type: data.image ? "image" : (data.text ? "text" : "shape"),
             box: {
                 x: emusToPixels(left),
                 y: emusToPixels(top),
@@ -1920,6 +1972,11 @@ function createPptShape(data, slideWidth, slideHeight) {
             },
             isMaster: false
         };
+
+        // Image
+        if (data.image) {
+            shape.src = data.image.dataUrl;
+        }
         
         if (data.fillColor && data.fillType !== 0) {
             shape.fill = { type: "solid", color: data.fillColor };
