@@ -526,11 +526,11 @@ function mergeTextStyles(base, override) {
     };
 }
 
-// A: convert points to px using 96/72
+// Convert points to px using 96/72 and a gentle downscale to better match Keynote sizing in the webview
 function styleToViewerRunStyle(style) {
     const out = {};
     if (style.fontSize != null) {
-        const px = style.fontSize * (96 / 72);
+        const px = style.fontSize * (96 / 72) * 0.6;
         out.fontSize = `${Math.round(px)}px`;
     }
     if (style.bold) out.fontWeight = "bold";
@@ -967,7 +967,8 @@ async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyl
     const geometryEl = findNearestGeometry(node);
     const box = getGeometryBox(geometryEl, slideSize);
     const paraData = [];
-    const fill = await findNearestFill(node, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
+    // Avoid painting a fill behind text; many Keynote text boxes have no visible background.
+    const fill = null;
     const geom = getGeomHint(node);
 
     for (const p of paragraphs) {

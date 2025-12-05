@@ -148,15 +148,7 @@ function renderSlidesToHtml(slides) {
                         const textHtml = shape.textData.paragraphs.map(para => {
                             const runHtml = para.runs.map(run => {
                         const styles = [];
-                        if (run.style.fontSize) {
-                            const num = parseFloat(run.style.fontSize);
-                            if (Number.isFinite(num)) {
-                                const scaled = Math.max(6, Math.round(num * scale));
-                                styles.push(`font-size: ${scaled}px`);
-                            } else {
-                                styles.push(`font-size: ${run.style.fontSize}`);
-                            }
-                        }
+                        if (run.style.fontSize) styles.push(`font-size: ${run.style.fontSize}`);
                         if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
                         if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
                         if (run.style.color) styles.push(`color: ${run.style.color}`);
