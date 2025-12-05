@@ -140,16 +140,17 @@ function renderSlidesToHtml(slides) {
                         const verticalAlign = shape.textData.verticalAlign || 'center';
                         const textHtml = shape.textData.paragraphs.map(para => {
                             const runHtml = para.runs.map(run => {
-                                const styles = [];
-                                if (run.style.fontSize) styles.push(`font-size: ${run.style.fontSize}`);
-                                if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
-                                if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
-                                if (run.style.color) styles.push(`color: ${run.style.color}`);
-                                if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
-                                
-                                const styleAttr = styles.length > 0 ? ` style="${styles.join('; ')}"` : '';
-                                return `<span${styleAttr}>${escapeHtml(run.text)}</span>`;
-                            }).join('');
+                        const styles = [];
+                        if (run.style.fontSize) styles.push(`font-size: ${run.style.fontSize}`);
+                        if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
+                        if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
+                        if (run.style.color) styles.push(`color: ${run.style.color}`);
+                        if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
+                        
+                        const styleAttr = styles.length > 0 ? ` style="${styles.join('; ')}"` : '';
+                        const safeText = escapeHtml(run.text).replace(/\n/g, "<br/>");
+                        return `<span${styleAttr}>${safeText}</span>`;
+                    }).join('');
                             
                             const textAlign = para.align || 'left';
                             const indentPx = Math.max(0, Math.round(((para.marL || 0) + (para.indent || 0)) * scale));
