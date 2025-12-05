@@ -216,7 +216,7 @@ function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
                     text: titleText, 
                     style: { 
                         fontSize: "38pt",
-                        fontWeight: "normal",
+                        fontWeight: "bold",
                         color: "#000000" 
                     } 
                 }],
@@ -645,20 +645,36 @@ function pptColorFromInt(colorInt) {
 }
 
 function createPptShape(data, slideWidth, slideHeight) {
-    if (!data.bounds || (!data.bounds.left && data.bounds.left !== 0)) return null;
-
-    const { left = 0, top = 0, right = slideWidth, bottom = slideHeight } = data.bounds;
-
     const emusToPixels = (emus) => Math.round(emus / 9525);
 
-    const shape = {
-        type: data.text ? "text" : data.image ? "image" : "shape",
-        box: {
+    // If we have bounds, treat them as EMUs and convert; otherwise use a generous fallback box.
+    let box;
+    if (data.bounds && (data.bounds.left || data.bounds.left === 0)) {
+        const { left = 0, top = 0, right = slideWidth, bottom = slideHeight } = data.bounds;
+        box = {
             x: emusToPixels(left),
             y: emusToPixels(top),
             cx: emusToPixels(right - left),
             cy: emusToPixels(bottom - top)
-        },
+        };
+    } else {
+        // Fallback: center a box that fills ~80% of the slide
+        const fallbackWidth = Math.round(slideWidth * 0.8);
+        const fallbackHeight = Math.round(slideHeight * 0.6);
+        const offsetX = Math.round((slideWidth - fallbackWidth) / 2);
+        const offsetY = Math.round((slideHeight - fallbackHeight) / 2);
+        box = { x: offsetX, y: offsetY, cx: fallbackWidth, cy: fallbackHeight };
+    }
+
+    // Guard against degenerate sizes
+    if (box.cx <= 0 || box.cy <= 0) {
+        box.cx = Math.max(box.cx, Math.round(slideWidth * 0.6));
+        box.cy = Math.max(box.cy, Math.round(slideHeight * 0.6));
+    }
+
+    const shape = {
+        type: data.text ? "text" : data.image ? "image" : "shape",
+        box,
         isMaster: false
     };
 

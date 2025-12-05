@@ -1,8 +1,5 @@
 import { decodeBase64ToUint8, parseXml, guessMimeFromBytes, uint8ToBase64, extractTrailingNumber, getImageDimensions } from "../utils.js";
 
-/**
- * Minimal Keynote support: uses embedded thumbnails when available.
- */
 export async function renderKeySlides(base64, maxSlides = 20) {
     try {
         const buffer = decodeBase64ToUint8(base64);
