@@ -37,6 +37,8 @@ function renderSlidesToHtml(slides) {
             const scale = VIEW_WIDTH / slide.size.cx;
             const heightPx = Math.round(slide.size.cy * scale);
             const backgroundColor = slide.background?.color || "#ffffff";
+            const backgroundImage = slide.background?.image;
+            const backgroundGradient = slide.background?.gradient;
             
             console.log(`Rendering slide ${idx} with ${slide.shapes.length} shapes`);
             
@@ -58,6 +60,11 @@ function renderSlidesToHtml(slides) {
                     if (shape.fill) {
                         if (shape.fill.type === 'solid') {
                             bgStyle = `background: ${shape.fill.color};`;
+                        } else if (shape.fill.type === 'image') {
+                            bgStyle = `background: url(${shape.fill.src}) center/cover no-repeat;`;
+                        } else if (shape.fill.type === 'gradient' && Array.isArray(shape.fill.colors)) {
+                            const g = shape.fill.colors;
+                            bgStyle = `background: linear-gradient(135deg, ${g[0]}, ${g[g.length - 1]});`;
                         } else if (shape.fill.type === 'none') {
                             bgStyle = 'background: transparent;';
                         }
@@ -141,7 +148,15 @@ function renderSlidesToHtml(slides) {
                         const textHtml = shape.textData.paragraphs.map(para => {
                             const runHtml = para.runs.map(run => {
                         const styles = [];
-                        if (run.style.fontSize) styles.push(`font-size: ${run.style.fontSize}`);
+                        if (run.style.fontSize) {
+                            const num = parseFloat(run.style.fontSize);
+                            if (Number.isFinite(num)) {
+                                const scaled = Math.max(6, Math.round(num * scale));
+                                styles.push(`font-size: ${scaled}px`);
+                            } else {
+                                styles.push(`font-size: ${run.style.fontSize}`);
+                            }
+                        }
                         if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
                         if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
                         if (run.style.color) styles.push(`color: ${run.style.color}`);
@@ -174,9 +189,17 @@ function renderSlidesToHtml(slides) {
                 })
                 .join("");
             
+            const backgroundStyleParts = [`background:${backgroundColor};`];
+            if (backgroundGradient && Array.isArray(backgroundGradient)) {
+                backgroundStyleParts.push(`background: linear-gradient(135deg, ${backgroundGradient[0]}, ${backgroundGradient[backgroundGradient.length - 1]});`);
+            }
+            if (backgroundImage) {
+                backgroundStyleParts.push(`background-image: url(${backgroundImage}); background-size: cover; background-repeat: no-repeat; background-position: center;`);
+            }
+
             return `
                 <article class="slide-frame" id="slide-${idx}" style="width:${VIEW_WIDTH}px;height:${heightPx}px;">
-                    <div class="slide-canvas" style="width:${VIEW_WIDTH}px;height:${heightPx}px;background:${backgroundColor};">
+                    <div class="slide-canvas" style="width:${VIEW_WIDTH}px;height:${heightPx}px;${backgroundStyleParts.join("")}">
                         ${shapesHtml}
                     </div>
                 </article>

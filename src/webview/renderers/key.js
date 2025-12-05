@@ -32,39 +32,68 @@ function reorderShapesForZIndex(shapes) {
 }
 
 
-function getSlideBackground(slideNode, graphicStyleIndex) {
-    // Look for explicit <sf:slide-background> or <sf:background-fill>
-    const bgFill = Array.from(slideNode.getElementsByTagName("*")).find(
-        el => 
-            el.localName === "background-fill" || 
+async function getSlideBackground(slideNode, graphicStyleIndex, slideStyleIndex, imageBinaryIndex, zip, fileNames) {
+    const candidates = Array.from(slideNode.getElementsByTagName("*")).filter(
+        (el) =>
+            el.localName === "background-fill" ||
             el.localName === "slide-background" ||
             el.localName === "background"
     );
 
-    if (bgFill) {
-        const col = extractColorFromElement(bgFill);
-        if (col) return { color: col, found: true };
+    for (const el of candidates) {
+        const fill = await extractFillFromNode(el, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
+        if (fill) {
+            if (fill.type === "image") return { image: fill.src, color: "#ffffff", found: true };
+            if (fill.type === "gradient") return { gradient: fill.colors, color: fill.colors?.[0] ?? "#ffffff", found: true };
+            if (fill.type === "solid" && fill.color) return { color: fill.color, found: true };
+        }
+    }
+
+    const styleRefAttr =
+        slideNode.getAttribute?.("sf:style-ref") ||
+        slideNode.getAttribute?.("style-ref");
+    const styleRefEl = Array.from(slideNode.children || []).find(
+        (el) => el.localName === "style-ref"
+    );
+    const styleRef = styleRefAttr || getIdRef(styleRefEl);
+
+    if (styleRef && slideStyleIndex?.[styleRef]) {
+        const fill = slideStyleIndex[styleRef];
+        if (fill.type === "image-ref") {
+            const img = await resolveImageRef(fill.path, zip, fileNames);
+            if (img) return { image: img.src, color: "#ffffff", found: true };
+        } else if (fill.type === "image") {
+            return { image: fill.src, color: "#ffffff", found: true };
+        } else if (fill.type === "gradient") {
+            return { gradient: fill.colors, color: fill.colors?.[0] ?? "#ffffff", found: true };
+        } else if (fill.type === "solid" && fill.color) {
+            return { color: fill.color, found: true };
+        }
     }
 
     // Look for <sf:style> child attached to slide-level background
     const styleEl = Array.from(slideNode.getElementsByTagName("*")).find(
-        el => el.localName === "style" && el.parentElement === slideNode
+        (el) => el.localName === "style" && el.parentElement === slideNode
     );
 
     if (styleEl) {
-        const fill = extractFillFromNode(styleEl, graphicStyleIndex);
-        if (fill && fill.type === "solid") {
-            return { color: fill.color, found: true };
+        const fill = await extractFillFromNode(styleEl, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
+        if (fill) {
+            if (fill.type === "image") return { image: fill.src, color: "#ffffff", found: true };
+            if (fill.type === "gradient") return { gradient: fill.colors, color: fill.colors?.[0] ?? "#ffffff", found: true };
+            if (fill.type === "solid" && fill.color) {
+                return { color: fill.color, found: true };
+            }
         }
     }
 
     return { color: "#ffffff", found: false };
 }
 
-function findNearestFill(node, graphicStyleIndex) {
+async function findNearestFill(node, graphicStyleIndex, imageBinaryIndex, zip, fileNames) {
     let current = node;
     while (current) {
-        const fill = extractFillFromNode(current, graphicStyleIndex);
+        const fill = await extractFillFromNode(current, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
         if (fill && fill.type && fill.type !== "none") {
             return fill;
         }
@@ -150,7 +179,7 @@ function findNearestGeometry(node) {
     let current = node;
     while (current) {
         const candidate = Array.from(current.children || []).find(
-            (c) => c.localName === "geometry"
+            (c) => c.localName === "geometry" || c.localName === "crop-geometry"
         );
         if (candidate) return candidate;
         current = current.parentElement;
@@ -190,7 +219,19 @@ function resolveGraphicFill(styleIndex, ref) {
     return styleIndex[ref] || styleIndex[cleaned] || null;
 }
 
-function extractFillFromNode(node, graphicStyleIndex) {
+async function resolveImageRef(pathAttr, zip, fileNames) {
+    if (!zip || !fileNames || !pathAttr) return null;
+    const file = findAssetFile(zip, fileNames, pathAttr);
+    if (!file) return null;
+    const bytes = await file.async("uint8array");
+    const mime = guessMimeFromBytes(pathAttr, bytes);
+    return {
+        src: `data:${mime};base64,${uint8ToBase64(bytes)}`,
+        mime
+    };
+}
+
+async function extractFillFromNode(node, graphicStyleIndex, imageBinaryIndex, zip, fileNames) {
     if (!node) return null;
 
     let styleEl = null;
@@ -200,16 +241,88 @@ function extractFillFromNode(node, graphicStyleIndex) {
             (el) => el.localName === "style"
         );
     }
-    if (!styleEl) return null;
 
-    const fillEl = Array.from(styleEl.getElementsByTagName("*")).find(
-        (el) =>
-            el.localName === "fill" ||
-            el.localName === "background-fill" ||
-            el.localName === "shape-fill"
-    );
+    let fillEl = null;
+    if (
+        node.localName === "fill" ||
+        node.localName === "background-fill" ||
+        node.localName === "shape-fill" ||
+        node.localName === "graphic-fill"
+    ) {
+        fillEl = node;
+    } else if (styleEl) {
+        fillEl = Array.from(styleEl.getElementsByTagName("*")).find(
+            (el) =>
+                el.localName === "fill" ||
+                el.localName === "background-fill" ||
+                el.localName === "shape-fill" ||
+                el.localName === "graphic-fill"
+        );
+    }
+
+    if (!fillEl && !styleEl) return null;
 
     if (fillEl) {
+        // Prefer image/pattern fills if a path is present.
+        const pathAttr =
+            fillEl.getAttribute("sf:path") ||
+            fillEl.getAttribute("path") ||
+            fillEl.getAttribute("sf:displayname") ||
+            fillEl.getAttribute("displayname");
+
+        const dataEl = Array.from(fillEl.getElementsByTagName("*")).find(
+            (el) => el.localName === "data"
+        );
+        const dataPath =
+            dataEl?.getAttribute("sf:path") ||
+            dataEl?.getAttribute("path") ||
+            dataEl?.getAttribute("sf:displayname") ||
+            dataEl?.getAttribute("displayname");
+
+        const refEl = Array.from(fillEl.getElementsByTagName("*")).find(
+            (el) => el.localName === "unfiltered-ref" || el.localName === "data-ref"
+        );
+        const refId = getIdRef(refEl);
+        const refPath = refId && imageBinaryIndex?.[refId]?.path;
+
+        const pickedPath = dataPath || pathAttr || refPath;
+        if (pickedPath) {
+            const img = await resolveImageRef(pickedPath, zip, fileNames);
+            if (img) {
+                return {
+                    type: "image",
+                    src: img.src,
+                    mime: img.mime
+                };
+            }
+        } else if (refId) {
+            const imgEntry = imageBinaryIndex?.[refId];
+            if (imgEntry?.path) {
+                const img = await resolveImageRef(imgEntry.path, zip, fileNames);
+                if (img) {
+                    return {
+                        type: "image",
+                        src: img.src,
+                        mime: img.mime
+                    };
+                }
+            }
+        }
+
+        // Simple gradient approximation: collect two colors if present.
+        const colorNodes = Array.from(fillEl.getElementsByTagName("*")).filter(
+            (el) => el.localName === "color"
+        );
+        if (colorNodes.length >= 2) {
+            const colors = colorNodes.map((c) => extractColorFromElement(c)).filter(Boolean);
+            if (colors.length >= 2) {
+                return {
+                    type: "gradient",
+                    colors: colors.slice(0, 2)
+                };
+            }
+        }
+
         const color = extractColorFromElement(fillEl);
         if (!color) {
             return { type: "none" };
@@ -233,7 +346,14 @@ function extractFillFromNode(node, graphicStyleIndex) {
         graphicRefEl?.getAttribute("IDREF") ||
         graphicRefEl?.getAttribute("idref");
     const resolved = resolveGraphicFill(graphicStyleIndex, ref);
-    if (resolved) return resolved;
+    if (resolved) {
+        if (resolved.type === "image-ref") {
+            const img = await resolveImageRef(resolved.path, zip, fileNames);
+            if (img) return { type: "image", src: img.src, mime: img.mime };
+        } else {
+            return resolved;
+        }
+    }
 
     // Some themes use a background color directly on the style
     const col = extractColorFromElement(styleEl);
@@ -248,7 +368,7 @@ function extractFillFromNode(node, graphicStyleIndex) {
 function parseNumberFromProperty(propEl) {
     if (!propEl) return null;
     const numEl = Array.from(propEl.getElementsByTagName("*")).find(
-        (c) => c.localName === "number"
+        (c) => c.localName === "number" || c.localName === "decimal-number"
     );
     if (!numEl) return null;
 
@@ -321,17 +441,18 @@ function buildTextStyleIndex(doc) {
     );
 
     for (const ss of stylesheets) {
-        const stylesEl = Array.from(ss.children).find(
-            (c) => c.localName === "styles"
+        const styleContainers = Array.from(ss.children).filter(
+            (c) => c.localName === "styles" || c.localName === "anon-styles"
         );
-        if (!stylesEl) continue;
+        if (!styleContainers.length) continue;
 
-        for (const node of Array.from(stylesEl.children)) {
-            const ln = node.localName;
-            if (
-                ln !== "paragraph-style" &&
-                ln !== "paragraphstyle" &&
-                ln !== "character-style" &&
+        for (const stylesEl of styleContainers) {
+            for (const node of Array.from(stylesEl.children)) {
+                const ln = node.localName;
+                if (
+                    ln !== "paragraph-style" &&
+                    ln !== "paragraphstyle" &&
+                    ln !== "character-style" &&
                 ln !== "characterstyle"
             ) {
                 continue;
@@ -345,22 +466,27 @@ function buildTextStyleIndex(doc) {
                 node.getAttribute("sf:ident") ||
                 node.getAttribute("ident") ||
                 node.getAttribute("name");
+            const parentIdent =
+                node.getAttribute("sf:parent-ident") ||
+                node.getAttribute("parent-ident");
 
             const propMap = Array.from(node.children).find(
                 (c) => c.localName === "property-map"
             );
             const style = parseTextStylePropertyMap(propMap);
 
-            const entry = {
-                ...style,
-                kind:
-                    ln === "paragraph-style" || ln === "paragraphstyle"
-                        ? "paragraph"
-                        : "character"
-            };
+                const entry = {
+                    ...style,
+                    parentIdent: parentIdent || null,
+                    kind:
+                        ln === "paragraph-style" || ln === "paragraphstyle"
+                            ? "paragraph"
+                            : "character"
+                };
 
-            if (idAttr) byId[idAttr] = entry;
-            if (identAttr) byIdent[identAttr] = entry;
+                if (idAttr) byId[idAttr] = entry;
+                if (identAttr) byIdent[identAttr] = entry;
+            }
         }
     }
 
@@ -372,12 +498,25 @@ function resolveTextStyle(styleIndex, ref) {
     const cleaned = ref.replace(/^.*:/, ""); // drop "key:" / "sf:" prefixes
     const { byId, byIdent } = styleIndex;
 
-    return (
-        byId[ref] ||
-        byIdent[ref] ||
-        byId[cleaned] ||
-        byIdent[cleaned] || {}
-    );
+    const lookup = (key) => byId[key] || byIdent[key] || byId[key.replace(/^.*:/, "")] || byIdent[key.replace(/^.*:/, "")];
+    let entry = lookup(ref) || lookup(cleaned);
+    if (!entry) return {};
+
+    const visited = new Set();
+    const chain = [];
+    while (entry && !visited.has(entry)) {
+        chain.push(entry);
+        visited.add(entry);
+        if (!entry.parentIdent) break;
+        entry = lookup(entry.parentIdent);
+    }
+
+    // Merge from root parent → child so child overrides.
+    let merged = {};
+    for (let i = chain.length - 1; i >= 0; i--) {
+        merged = { ...merged, ...chain[i] };
+    }
+    return merged;
 }
 
 function mergeTextStyles(base, override) {
@@ -441,7 +580,17 @@ function getGeomHint(node) {
     return null;
 }
 
-function buildGraphicStyleIndex(doc) {
+function hasPlaceholderAncestor(node) {
+    let current = node;
+    while (current) {
+        const name = (current.localName || "").toLowerCase();
+        if (name.includes("placeholder")) return true;
+        current = current.parentElement;
+    }
+    return false;
+}
+
+function buildGraphicStyleIndex(doc, imageBinaryIndex) {
     const map = Object.create(null);
     const nodes = Array.from(doc.getElementsByTagName("*")).filter(
         (el) => el.localName === "graphic-style"
@@ -466,14 +615,125 @@ function buildGraphicStyleIndex(doc) {
 
         let fill = null;
         if (fillEl) {
-            const color = extractColorFromElement(fillEl);
-            if (color) fill = { type: "solid", color };
+            const pathAttr =
+                fillEl.getAttribute("sf:path") ||
+                fillEl.getAttribute("path") ||
+                fillEl.getAttribute("sf:displayname") ||
+                fillEl.getAttribute("displayname");
+            const dataEl = Array.from(fillEl.getElementsByTagName("*")).find(
+                (el) => el.localName === "data"
+            );
+            const dataPath =
+                dataEl?.getAttribute("sf:path") ||
+                dataEl?.getAttribute("path") ||
+                dataEl?.getAttribute("sf:displayname") ||
+                dataEl?.getAttribute("displayname");
+            const refEl = Array.from(fillEl.getElementsByTagName("*")).find(
+                (el) => el.localName === "unfiltered-ref" || el.localName === "data-ref"
+            );
+            const refId = getIdRef(refEl);
+            const refPath = refId && imageBinaryIndex?.[refId]?.path;
+            const chosenPath = dataPath || pathAttr || refPath;
+
+            if (chosenPath) {
+                fill = { type: "image-ref", path: chosenPath };
+            } else {
+                const colorNodes = Array.from(fillEl.getElementsByTagName("*")).filter(
+                    (el) => el.localName === "color"
+                );
+                if (colorNodes.length >= 2) {
+                    const colors = colorNodes.map((c) => extractColorFromElement(c)).filter(Boolean);
+                    if (colors.length >= 2) {
+                        fill = { type: "gradient", colors: colors.slice(0, 2) };
+                    }
+                }
+                if (!fill) {
+                    const color = extractColorFromElement(fillEl);
+                    if (color) fill = { type: "solid", color };
+                }
+            }
         } else {
             const color = extractColorFromElement(propMap);
             if (color) fill = { type: "solid", color };
         }
 
         if (fill) {
+            if (id) map[id] = fill;
+            if (ident && !map[ident]) map[ident] = fill;
+        }
+    }
+
+    return map;
+}
+
+function buildSlideStyleIndex(doc, imageBinaryIndex) {
+    const map = Object.create(null);
+    const nodes = Array.from(doc.getElementsByTagName("*")).filter(
+        (el) => el.localName === "slide-style"
+    );
+
+    for (const node of nodes) {
+        const id =
+            node.getAttribute("sfa:ID") ||
+            node.getAttribute("ID") ||
+            node.getAttribute("id");
+        const ident = node.getAttribute("sf:ident") || node.getAttribute("ident");
+        const propMap =
+            Array.from(node.children).find((c) => c.localName === "property-map") ||
+            node;
+
+        const fillEl = Array.from(propMap.getElementsByTagName("*")).find(
+            (el) =>
+                el.localName === "fill" ||
+                el.localName === "background-fill" ||
+                el.localName === "shape-fill"
+        );
+
+        let fill = null;
+        if (fillEl) {
+            const pathAttr =
+                fillEl.getAttribute("sf:path") ||
+                fillEl.getAttribute("path") ||
+                fillEl.getAttribute("sf:displayname") ||
+                fillEl.getAttribute("displayname");
+            const dataEl = Array.from(fillEl.getElementsByTagName("*")).find(
+                (el) => el.localName === "data"
+            );
+            const dataPath =
+                dataEl?.getAttribute("sf:path") ||
+                dataEl?.getAttribute("path") ||
+                dataEl?.getAttribute("sf:displayname") ||
+                dataEl?.getAttribute("displayname");
+            const refEl = Array.from(fillEl.getElementsByTagName("*")).find(
+                (el) => el.localName === "unfiltered-ref" || el.localName === "data-ref"
+            );
+            const refId = getIdRef(refEl);
+            const refPath = refId && imageBinaryIndex?.[refId]?.path;
+            const chosenPath = dataPath || pathAttr || refPath;
+
+            if (chosenPath) {
+                fill = { type: "image-ref", path: chosenPath };
+            } else {
+                const colorNodes = Array.from(fillEl.getElementsByTagName("*")).filter(
+                    (el) => el.localName === "color"
+                );
+                if (colorNodes.length >= 2) {
+                    const colors = colorNodes.map((c) => extractColorFromElement(c)).filter(Boolean);
+                    if (colors.length >= 2) {
+                        fill = { type: "gradient", colors: colors.slice(0, 2) };
+                    }
+                }
+                if (!fill) {
+                    const color = extractColorFromElement(fillEl);
+                    if (color) fill = { type: "solid", color };
+                }
+            }
+        } else {
+            const color = extractColorFromElement(propMap);
+            if (color) fill = { type: "solid", color };
+        }
+
+        if (fill && (id || ident)) {
             if (id) map[id] = fill;
             if (ident && !map[ident]) map[ident] = fill;
         }
@@ -543,6 +803,15 @@ function getNodeId(node) {
     );
 }
 
+function getIdRef(node) {
+    if (!node) return null;
+    return (
+        node.getAttribute("sfa:IDREF") ||
+        node.getAttribute("IDREF") ||
+        node.getAttribute("idref")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ZIP helpers / images
 // ---------------------------------------------------------------------------
@@ -578,44 +847,90 @@ function findAssetFile(zip, fileNames, requestedPath) {
     return null;
 }
 
-async function buildImageShapeFromElement(zip, fileNames, imageEl, slideSize, isMasterShape = false) {
-    const geometryEl = findNearestGeometry(imageEl);
-    const binaryEl = Array.from(imageEl.getElementsByTagName("*")).find(
-        (c) => c.localName === "binary"
-    );
-    if (!binaryEl) return null;
+function buildImageBinaryIndex(doc) {
+    const map = Object.create(null);
+    const candidates = Array.from(doc.getElementsByTagName("*")).filter((el) => {
+        const ln = (el.localName || "").toLowerCase();
+        return (
+            ln === "unfiltered" ||
+            ln === "filtered-image" ||
+            ln === "image-binary" ||
+            ln === "imagebinary" ||
+            ln === "binary"
+        );
+    });
 
-    const dataEl = Array.from(binaryEl.getElementsByTagName("*")).find(
-        (c) => c.localName === "data"
+    for (const node of candidates) {
+        const id = getNodeId(node);
+        const dataEl = Array.from(node.getElementsByTagName("*")).find((c) => c.localName === "data");
+        if (!id || !dataEl) continue;
+
+        const path =
+            dataEl.getAttribute("sf:path") ||
+            dataEl.getAttribute("path") ||
+            dataEl.getAttribute("sf:displayname") ||
+            dataEl.getAttribute("displayname");
+        if (!path) continue;
+
+        const sizeEl = Array.from(node.getElementsByTagName("*")).find((c) => c.localName === "size");
+        const w = sizeEl ? parseFloat(sizeEl.getAttribute("sfa:w") || sizeEl.getAttribute("w") || "") : null;
+        const h = sizeEl ? parseFloat(sizeEl.getAttribute("sfa:h") || sizeEl.getAttribute("h") || "") : null;
+        const size =
+            w != null && h != null && !Number.isNaN(w) && !Number.isNaN(h)
+                ? { cx: w, cy: h }
+                : null;
+
+        const entry = { path, size };
+        map[id] = entry;
+
+        const dataId =
+            dataEl.getAttribute("sfa:ID") ||
+            dataEl.getAttribute("ID") ||
+            dataEl.getAttribute("id");
+        if (dataId) {
+            map[dataId] = entry;
+        }
+    }
+
+    return map;
+}
+
+async function buildImageShapeFromElement(zip, fileNames, imageBinaryIndex, imageEl, slideSize, isMasterShape = false) {
+    const geometryEl = findNearestGeometry(imageEl);
+    const dataEl = Array.from(imageEl.getElementsByTagName("*")).find((c) => c.localName === "data");
+    const refEl = Array.from(imageEl.getElementsByTagName("*")).find(
+        (c) => c.localName === "unfiltered-ref" || c.localName === "data-ref"
     );
-    if (!dataEl) return null;
 
     const pathAttr =
-        dataEl.getAttribute("sf:path") ||
-        dataEl.getAttribute("path") ||
-        dataEl.getAttribute("sf:displayname") ||
-        dataEl.getAttribute("displayname");
-    if (!pathAttr) return null;
+        dataEl?.getAttribute("sf:path") ||
+        dataEl?.getAttribute("path") ||
+        dataEl?.getAttribute("sf:displayname") ||
+        dataEl?.getAttribute("displayname");
+    const refId = getIdRef(refEl);
+    const refEntry = refId ? imageBinaryIndex?.[refId] : null;
+    const pickedPath = pathAttr || refEntry?.path;
+    if (!pickedPath) return null;
 
-    const file = findAssetFile(zip, fileNames, pathAttr);
+    const file = findAssetFile(zip, fileNames, pickedPath);
     if (!file) return null;
 
     const bytes = await file.async("uint8array");
     let mime = null;
     try {
-        mime = guessMimeFromBytes(pathAttr, bytes);
+        mime = guessMimeFromBytes(pickedPath, bytes);
     } catch {
         // ignore
     }
     if (!mime) {
-        const lower = pathAttr.toLowerCase();
+        const lower = pickedPath.toLowerCase();
         if (lower.endsWith(".png")) mime = "image/png";
         else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) mime = "image/jpeg";
         else if (lower.endsWith(".tif") || lower.endsWith(".tiff")) mime = "image/tiff";
         else mime = "image/octet-stream";
     }
 
-    const dims = getImageDimensions(bytes, mime) || slideSize;
+    const dims = getImageDimensions(bytes, mime) || refEntry?.size || slideSize;
     const boxFromGeom = getGeometryBox(geometryEl, dims);
     const dataUrl = `data:${mime};base64,${uint8ToBase64(bytes)}`;
 
@@ -632,7 +947,7 @@ async function buildImageShapeFromElement(zip, fileNames, imageEl, slideSize, is
 // Text and vector shapes
 // ---------------------------------------------------------------------------
 
-function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyleIndex, isMasterShape = false) {
+async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyleIndex, imageBinaryIndex, zip, fileNames, isMasterShape = false) {
     const all = Array.from(node.getElementsByTagName("*"));
 
     let textStorageEl = null;
@@ -652,7 +967,7 @@ function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyleIndex
     const geometryEl = findNearestGeometry(node);
     const box = getGeometryBox(geometryEl, slideSize);
     const paraData = [];
-    const fill = findNearestFill(node, graphicStyleIndex);
+    const fill = await findNearestFill(node, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
     const geom = getGeomHint(node);
 
     for (const p of paragraphs) {
@@ -709,6 +1024,19 @@ function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyleIndex
 
     if (!paraData.length) return null;
 
+    const combinedText = paraData.map((p) => p.runs.map((r) => r.text).join(" ")).join(" ").trim().toLowerCase();
+    const isPlaceholderText =
+        !combinedText ||
+        combinedText.startsWith("body level") ||
+        combinedText === "title text" ||
+        combinedText === "subtitle" ||
+        combinedText === "click to add title" ||
+        combinedText === "click to add subtitle";
+
+    if (isPlaceholderText || (isMasterShape && hasPlaceholderAncestor(node))) {
+        return null;
+    }
+
     return {
         type: "text",
         box,
@@ -722,7 +1050,7 @@ function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyleIndex
     };
 }
 
-function extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, isMasterShape = false) {
+async function extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, imageBinaryIndex, zip, fileNames, isMasterShape = false) {
     const all = Array.from(node.getElementsByTagName("*"));
 
     let styleEl = null;
@@ -732,7 +1060,7 @@ function extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, isMaster
         if (styleEl) break;
     }
 
-    const fill = extractFillFromNode(styleEl || node, graphicStyleIndex);
+    const fill = await extractFillFromNode(styleEl || node, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
     if (!fill || fill.type === "none") return null;
 
     const geometryEl = findNearestGeometry(node);
@@ -757,6 +1085,7 @@ async function collectShapesForSlide(
     slideNode,
     zip,
     fileNames,
+    imageBinaryIndex,
     slideSize,
     styleIndex,
     graphicStyleIndex,
@@ -786,26 +1115,54 @@ async function collectShapesForSlide(
 
         if (ln === "image") {
             imagePromises.push(
-                buildImageShapeFromElement(zip, fileNames, node, slideSize, markAsMaster)
+                buildImageShapeFromElement(zip, fileNames, imageBinaryIndex, node, slideSize, markAsMaster)
             );
             return;
         }
 
+        if (ln === "media" || ln === "image-media") {
+            imagePromises.push(
+                buildImageShapeFromElement(zip, fileNames, imageBinaryIndex, node, slideSize, markAsMaster)
+            );
+            // Avoid double-building the nested image-media if the parent media already covered it.
+            for (const child of Array.from(node.children)) {
+                if (child.localName === "image-media") continue;
+                walk(child);
+            }
+            return;
+        }
+
         if (ln === "text" || ln === "drawable-shape" || ln === "shape") {
-            const textShape = extractTextShapeFromNode(
+            if (markAsMaster && hasPlaceholderAncestor(node)) {
+                return;
+            }
+            const textShapePromise = extractTextShapeFromNode(
                 node,
                 slideSize,
                 styleIndex,
                 graphicStyleIndex,
+                imageBinaryIndex,
+                zip,
+                fileNames,
                 markAsMaster
             );
-            if (textShape) {
-                shapes.push(textShape);
-            } else if (ln === "shape") {
-                const vec = extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, markAsMaster);
-                if (vec) shapes.push(vec);
-            }
-
+            imagePromises.push(
+                textShapePromise.then((textShape) => {
+                    if (textShape) return textShape;
+                    if (ln === "shape") {
+                        return extractVectorShapeFromNode(
+                            node,
+                            slideSize,
+                            graphicStyleIndex,
+                            imageBinaryIndex,
+                            zip,
+                            fileNames,
+                            markAsMaster
+                        );
+                    }
+                    return null;
+                })
+            );
             for (const child of Array.from(node.children)) {
                 walk(child);
             }
@@ -840,7 +1197,8 @@ function pickBackgroundFromShapes(shapes, slideSize) {
 
     for (const s of shapes) {
         const isFilledText = s.type === "text" && s.fill && s.fill.type === "solid";
-        if (s.type !== "shape" && s.type !== "image" && !isFilledText) continue;
+        const isImageFill = s.type === "shape" && s.fill && s.fill.type === "image";
+        if (s.type !== "shape" && s.type !== "image" && !isFilledText && !isImageFill) continue;
         const area = (s.box?.cx || 0) * (s.box?.cy || 0);
         const coverage = area / areaSlide;
         if (coverage < 0.6) continue;
@@ -855,15 +1213,23 @@ function pickBackgroundFromShapes(shapes, slideSize) {
     const others = shapes.filter((s) => s !== best);
     const ordered = [best, ...others];
 
-    let bgColor = "#ffffff";
-    if (best.type === "shape" && best.fill && best.fill.type === "solid") {
-        bgColor = best.fill.color;
+    let background = { color: "#ffffff" };
+    if (best.type === "shape" && best.fill) {
+        if (best.fill.type === "solid") {
+            background = { color: best.fill.color };
+        } else if (best.fill.type === "image") {
+            background = { color: "#ffffff", image: best.fill.src };
+        } else if (best.fill.type === "gradient") {
+            background = { color: best.fill.colors?.[0] ?? "#ffffff", gradient: best.fill.colors };
+        }
     } else if (best.type === "text" && best.fill && best.fill.type === "solid") {
-        bgColor = best.fill.color;
+        background = { color: best.fill.color };
+    } else if (best.type === "image" && best.src) {
+        background = { color: "#ffffff", image: best.src };
     }
 
     return {
-        background: { color: bgColor },
+        background,
         shapes: ordered
     };
 }
@@ -961,8 +1327,10 @@ export async function renderKeySlides(base64, maxSlides = 20) {
         const slideSize = getSlideSizeFromDoc(doc);
         const slideNodes = getSlideNodes(doc);
         const masterNodes = getMasterSlideNodes(doc);
+        const imageBinaryIndex = buildImageBinaryIndex(doc);
+        const slideStyleIndex = buildSlideStyleIndex(doc, imageBinaryIndex);
         const styleIndex = buildTextStyleIndex(doc);
-        const graphicStyleIndex = buildGraphicStyleIndex(doc);
+        const graphicStyleIndex = buildGraphicStyleIndex(doc, imageBinaryIndex);
 
         const masterShapeMap = Object.create(null);
         const masterBackgroundMap = Object.create(null);
@@ -976,6 +1344,7 @@ export async function renderKeySlides(base64, maxSlides = 20) {
                 masterNode,
                 zip,
                 fileNames,
+                imageBinaryIndex,
                 slideSize,
                 styleIndex,
                 graphicStyleIndex,
@@ -983,7 +1352,7 @@ export async function renderKeySlides(base64, maxSlides = 20) {
             );
             if (mid && mShapes.length) masterShapeMap[mid] = mShapes;
 
-            const mBg = getSlideBackground(masterNode, graphicStyleIndex);
+            const mBg = await getSlideBackground(masterNode, graphicStyleIndex, slideStyleIndex, imageBinaryIndex, zip, fileNames);
             if (mid) masterBackgroundMap[mid] = mBg;
         }
 
@@ -998,6 +1367,7 @@ export async function renderKeySlides(base64, maxSlides = 20) {
                 slideNode,
                 zip,
                 fileNames,
+                imageBinaryIndex,
                 slideSize,
                 styleIndex,
                 graphicStyleIndex
@@ -1005,7 +1375,7 @@ export async function renderKeySlides(base64, maxSlides = 20) {
             let combinedShapes = [...inheritedShapes, ...slideShapes];
             if (!combinedShapes.length) continue;
 
-            let background = getSlideBackground(slideNode, graphicStyleIndex);
+            let background = await getSlideBackground(slideNode, graphicStyleIndex, slideStyleIndex, imageBinaryIndex, zip, fileNames);
             if (!background?.found && masterRef && masterBackgroundMap[masterRef]) {
                 background = masterBackgroundMap[masterRef];
             }
@@ -1014,6 +1384,12 @@ export async function renderKeySlides(base64, maxSlides = 20) {
                 const picked = pickBackgroundFromShapes(combinedShapes, slideSize);
                 background = picked.background;
                 combinedShapes = picked.shapes;
+            } else if (!background.image && !background.gradient) {
+                const picked = pickBackgroundFromShapes(combinedShapes, slideSize);
+                if (picked.background.image || picked.background.gradient) {
+                    background = picked.background;
+                    combinedShapes = picked.shapes;
+                }
             }
 
             const orderedShapes = reorderShapesForZIndex(combinedShapes);
