@@ -105,9 +105,13 @@ function renderSlidesToHtml(slides) {
                             bgStyle = `background: ${shape.fill.color};`;
                         } else if (shape.fill.type === 'image') {
                             bgStyle = `background: url(${shape.fill.src}) center/cover no-repeat;`;
-                        } else if (shape.fill.type === 'gradient' && Array.isArray(shape.fill.colors)) {
-                            const g = shape.fill.colors;
-                            bgStyle = `background: linear-gradient(135deg, ${g[0]}, ${g[g.length - 1]});`;
+                        } else if (shape.fill.type === 'gradient' && Array.isArray(shape.fill.stops)) {
+                            const stops = shape.fill.stops;
+                            const parts = stops.map((s, idx) => {
+                                const pct = s.pos != null ? `${(s.pos / 1000).toFixed(1)}%` : `${Math.round((idx / Math.max(1, stops.length - 1)) * 100)}%`;
+                                return `${s.color} ${pct}`;
+                            });
+                            bgStyle = `background: linear-gradient(135deg, ${parts.join(", ")});`;
                         } else if (shape.fill.type === 'none') {
                             bgStyle = 'background: transparent;';
                         }
@@ -241,7 +245,8 @@ function renderSlidesToHtml(slides) {
                                 lowerText.includes("resource");
                         const diagramAutoWhite = shape.isDiagram && !run.style.color;
                         const forcedWhite = paraForceWhite || runForceWhite || diagramAutoWhite;
-                        if (run.style.color || forcedWhite) styles.push(`color: ${forcedWhite ? "#ffffff" : run.style.color}`);
+                        const resolvedColor = forcedWhite ? "#ffffff" : (run.style.color || "#111111");
+                        styles.push(`color: ${resolvedColor}`);
                         if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
                         if (run.style.textDecoration) styles.push(`text-decoration: ${run.style.textDecoration}`);
                         if (run.style.letterSpacing) styles.push(`letter-spacing: ${run.style.letterSpacing}`);

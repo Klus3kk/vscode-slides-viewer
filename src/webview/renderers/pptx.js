@@ -16,7 +16,11 @@ const DEFAULT_THEME_COLORS = {
     accent5: "#4bacc6",
     accent6: "#f79646",
     hlink: "#0000ff",
-    folHlink: "#800080"
+    folHlink: "#800080",
+    bg1: "#ffffff",
+    bg2: "#000000",
+    tx1: "#000000",
+    tx2: "#ffffff"
 };
 
 async function getThemeColors(zip) {
@@ -117,22 +121,85 @@ function applyTintShade(hex, tint, shade) {
     return fromRgb(r, g, b);
 }
 
+function applyLumModOff(hex, lumMod, lumOff) {
+    if (lumMod == null && lumOff == null) return hex;
+    const toRgb = (h) => {
+        const n = parseInt(h.replace("#", ""), 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const fromRgb = (r, g, b) => `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+    const mod = lumMod != null ? lumMod / 100000 : 1;
+    const off = lumOff != null ? lumOff / 100000 : 0;
+    const [r, g, b] = toRgb(hex);
+    const adj = (c) => Math.min(255, Math.max(0, Math.round(c * mod + 255 * off)));
+    return fromRgb(adj(r), adj(g), adj(b));
+}
+
 function getColorFromXml(element, themeColors = DEFAULT_THEME_COLORS) {
     const srgbClr = Array.from(element.getElementsByTagName("*")).find((el) => el.localName === "srgbClr");
     if (srgbClr) {
         const val = srgbClr.getAttribute("val");
-        if (val) return `#${val}`;
+        let base = val ? `#${val}` : null;
+        if (base) {
+            const tintEl = Array.from(srgbClr.children).find((el) => el.localName === "tint");
+            const shadeEl = Array.from(srgbClr.children).find((el) => el.localName === "shade");
+            const lumModEl = Array.from(srgbClr.children).find((el) => el.localName === "lumMod");
+            const lumOffEl = Array.from(srgbClr.children).find((el) => el.localName === "lumOff");
+            const alphaEl = Array.from(srgbClr.children).find((el) => el.localName === "alpha");
+            base = applyTintShade(
+                base,
+                tintEl ? parseInt(tintEl.getAttribute("val") || "0", 10) : null,
+                shadeEl ? parseInt(shadeEl.getAttribute("val") || "0", 10) : null
+            );
+            base = applyLumModOff(
+                base,
+                lumModEl ? parseInt(lumModEl.getAttribute("val") || "100000", 10) : null,
+                lumOffEl ? parseInt(lumOffEl.getAttribute("val") || "0", 10) : null
+            );
+            const alpha = alphaEl ? parseInt(alphaEl.getAttribute("val") || "100000", 10) : 100000;
+            if (alpha < 100000) {
+                const pct = Math.max(0, Math.min(alpha / 100000, 1));
+                const n = parseInt(base.replace("#", ""), 16);
+                const r = (n >> 16) & 255;
+                const g = (n >> 8) & 255;
+                const b = n & 255;
+                return `rgba(${r}, ${g}, ${b}, ${pct.toFixed(3)})`;
+            }
+            return base;
+        }
     }
     const schemeClr = Array.from(element.getElementsByTagName("*")).find((el) => el.localName === "schemeClr");
     if (schemeClr) {
         const val = schemeClr.getAttribute("val");
-        let base = val && themeColors[val] ? themeColors[val] : null;
+        let mapped = val;
+        if (val === "bg1") mapped = "lt1";
+        else if (val === "bg2") mapped = "dk1";
+        else if (val === "tx1") mapped = "dk1";
+        else if (val === "tx2") mapped = "lt1";
+        let base = mapped && themeColors[mapped] ? themeColors[mapped] : null;
         if (base) {
             const tintEl = Array.from(schemeClr.children).find((el) => el.localName === "tint");
             const shadeEl = Array.from(schemeClr.children).find((el) => el.localName === "shade");
+            const lumModEl = Array.from(schemeClr.children).find((el) => el.localName === "lumMod");
+            const lumOffEl = Array.from(schemeClr.children).find((el) => el.localName === "lumOff");
+            const alphaEl = Array.from(schemeClr.children).find((el) => el.localName === "alpha");
             const tint = tintEl ? parseInt(tintEl.getAttribute("val") || "0", 10) : null;
             const shade = shadeEl ? parseInt(shadeEl.getAttribute("val") || "0", 10) : null;
             base = applyTintShade(base, tint, shade);
+            base = applyLumModOff(
+                base,
+                lumModEl ? parseInt(lumModEl.getAttribute("val") || "100000", 10) : null,
+                lumOffEl ? parseInt(lumOffEl.getAttribute("val") || "0", 10) : null
+            );
+            const alpha = alphaEl ? parseInt(alphaEl.getAttribute("val") || "100000", 10) : 100000;
+            if (alpha < 100000) {
+                const pct = Math.max(0, Math.min(alpha / 100000, 1));
+                const n = parseInt(base.replace("#", ""), 16);
+                const r = (n >> 16) & 255;
+                const g = (n >> 8) & 255;
+                const b = n & 255;
+                return `rgba(${r}, ${g}, ${b}, ${pct.toFixed(3)})`;
+            }
             return base;
         }
     }
@@ -179,8 +246,14 @@ function getShapeFill(spPr, themeColors = DEFAULT_THEME_COLORS) {
     const gradFill = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "gradFill");
     if (gradFill) {
         const stops = Array.from(gradFill.getElementsByTagName("*")).filter((el) => el.localName === "gs");
-        const colors = stops.map((s) => getColorFromXml(s, themeColors)).filter(Boolean);
-        if (colors.length) return { type: "gradient", colors };
+        const parsed = stops
+            .map((s) => {
+                const c = getColorFromXml(s, themeColors);
+                const pos = parseInt(s.getAttribute("pos") || "0", 10);
+                return c ? { color: c, pos: isNaN(pos) ? null : pos } : null;
+            })
+            .filter(Boolean);
+        if (parsed.length) return { type: "gradient", stops: parsed };
     }
 
     const noFill = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "noFill");
@@ -246,7 +319,7 @@ function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLOR
             const fallbackFontSize =
                 paraDefaults.fontSize ||
                 shapeDefault.fontSize ||
-                (placeholderType === "title" || placeholderType === "ctrTitle" ? "44pt" : "18pt");
+                (placeholderType === "title" || placeholderType === "ctrTitle" ? "32pt" : "18pt");
 
             if (pPr) {
                 const algnAttr = pPr.getAttribute("algn");
@@ -365,7 +438,8 @@ function getPlaceholderInfo(shapeNode) {
     if (!ph) return null;
     return {
         type: ph.getAttribute("type") || "body",
-        idx: ph.getAttribute("idx") || "0"
+        idx: ph.getAttribute("idx") || "0",
+        size: ph.getAttribute("sz") || null
     };
 }
 
@@ -491,31 +565,67 @@ async function getLayoutAndMasterPaths(zip, slidePath) {
     try {
         const slideRelsPath = slidePath.replace("slides/slide", "slides/_rels/slide") + ".rels";
         const slideRelsXml = await zip.file(slideRelsPath)?.async("text");
-        if (!slideRelsXml) return { layoutPath: null, masterPath: null };
+        let layoutPath = null;
+        let masterPath = null;
 
-        const slideRels = buildRelationshipMap(slideRelsXml);
-        const layoutRel = Object.entries(slideRels).find(([_, target]) => target.includes("slideLayout"));
-        if (!layoutRel) return { layoutPath: null, masterPath: null };
+        if (slideRelsXml) {
+            const slideRels = buildRelationshipMap(slideRelsXml);
+            const layoutRel = Object.entries(slideRels).find(([_, target]) => target.includes("slideLayout"));
+            if (layoutRel) {
+                layoutPath = layoutRel[1];
+            }
+        }
 
-        let layoutPath = layoutRel[1];
-        if (layoutPath.startsWith("../")) {
+        // Fallback: take the first available slideLayout if none is linked.
+        if (!layoutPath) {
+            const numMatch = slidePath.match(/slide(\\d+)\\.xml$/);
+            const idx = numMatch ? parseInt(numMatch[1], 10) : NaN;
+            const candidateByIndex = Number.isFinite(idx)
+                ? `ppt/slideLayouts/slideLayout${idx}.xml`
+                : null;
+            const exists = candidateByIndex && zip.file(candidateByIndex);
+            if (exists) {
+                layoutPath = candidateByIndex;
+            } else {
+                const layouts = Object.keys(zip.files).filter(
+                    (n) => n.startsWith("ppt/slideLayouts/slideLayout") && n.endsWith(".xml")
+                );
+                layoutPath = layouts.sort()[0];
+            }
+        }
+        if (layoutPath?.startsWith("../")) {
             layoutPath = layoutPath.replace("../", "");
         }
-        layoutPath = `ppt/${layoutPath}`;
+        if (layoutPath && !layoutPath.startsWith("ppt/")) {
+            layoutPath = `ppt/${layoutPath}`;
+        }
+
+        if (!layoutPath) return { layoutPath: null, masterPath: null };
 
         const layoutRelsPath = layoutPath.replace("slideLayouts/slideLayout", "slideLayouts/_rels/slideLayout") + ".rels";
         const layoutRelsXml = await zip.file(layoutRelsPath)?.async("text");
-        if (!layoutRelsXml) return { layoutPath, masterPath: null };
 
-        const layoutRels = buildRelationshipMap(layoutRelsXml);
-        const masterRel = Object.entries(layoutRels).find(([_, target]) => target.includes("slideMaster"));
-        if (!masterRel) return { layoutPath, masterPath: null };
+        if (layoutRelsXml) {
+            const layoutRels = buildRelationshipMap(layoutRelsXml);
+            const masterRel = Object.entries(layoutRels).find(([_, target]) => target.includes("slideMaster"));
+            if (masterRel) {
+                masterPath = masterRel[1];
+            }
+        }
 
-        let masterPath = masterRel[1];
-        if (masterPath.startsWith("../")) {
+        // Fallback: first slide master if not found.
+        if (!masterPath) {
+            const firstMaster = Object.keys(zip.files)
+                .filter((n) => n.startsWith("ppt/slideMasters/slideMaster") && n.endsWith(".xml"))
+                .sort()[0];
+            masterPath = firstMaster || null;
+        }
+        if (masterPath?.startsWith("../")) {
             masterPath = masterPath.replace("../", "");
         }
-        masterPath = `ppt/${masterPath}`;
+        if (masterPath && !masterPath.startsWith("ppt/")) {
+            masterPath = `ppt/${masterPath}`;
+        }
 
         return { layoutPath, masterPath };
     } catch (e) {
@@ -659,6 +769,8 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
     );
 
     for (const node of nodes) {
+        const phInfo = getPlaceholderInfo(node);
+
         if (skipPlaceholders && isPlaceholder(node)) {
             continue;
         }
@@ -674,12 +786,9 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
         }
 
         let box = getShapeBox(node);
-        if (!box) {
-            const phInfo = getPlaceholderInfo(node);
-            if (phInfo) {
-                const key = `${phInfo.type}:${phInfo.idx}`;
-                box = placeholderBoxes[key] || placeholderBoxes[phInfo.type] || placeholderBoxes[`idx:${phInfo.idx}`] || null;
-            }
+        if (!box && phInfo) {
+            const key = `${phInfo.type}:${phInfo.idx}`;
+            box = placeholderBoxes[key] || placeholderBoxes[phInfo.type] || placeholderBoxes[`idx:${phInfo.idx}`] || null;
         }
         if (!box) continue;
 
