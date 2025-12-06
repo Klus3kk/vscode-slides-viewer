@@ -13,39 +13,38 @@ export async function renderPptSlides(base64) {
     const streamArray = pptStream instanceof Uint8Array ? pptStream : new Uint8Array(pptStream);
     const slides = parsePptStream(streamArray, pictures);
 
-    if (pictures.length > 0) {
-        const rasterPics = pictures.filter((p) => isBrowserRenderableImage(p.mime || ""));
-        const bgPic = rasterPics[0] || null;
+    // Replace non-renderable image shapes with raster fallbacks when possible.
+    const rasterPics = selectRasterPictures(pictures);
+    if (rasterPics.length) {
+        slides.forEach((slide) => {
+            slide.shapes = slide.shapes.map((shape) => {
+                if (shape.type === "image" && !shapeHasRenderableImage(shape)) {
+                    const pic = rasterPics[0];
+                    return { ...shape, src: pic.dataUrl, mime: pic.mime };
+                }
+                return shape;
+            });
+        });
+    }
+
+    // If a slide has no renderable images (or none at all), add a single full-slide raster fallback.
+    if (rasterPics.length) {
         slides.forEach((slide, idx) => {
-            const hasRenderableImage = slide.shapes.some((s) => shapeHasRenderableImage(s));
-            const mappedPic = rasterPics.length > 1
-                ? (rasterPics[idx + 1] || rasterPics[1 + (idx % (rasterPics.length - 1))])
-                : null;
-            const augmented = [];
-
-            if (bgPic) {
-                augmented.push({
-                    type: "image",
-                    box: { x: 0, y: 0, cx: slide.size.cx, cy: slide.size.cy },
-                    src: bgPic.dataUrl,
-                    isMaster: false
-                });
+            const hasRenderable = slide.shapes.some((s) => shapeHasRenderableImage(s));
+            const hasAnyImage = slide.shapes.some((s) => s.type === "image");
+            if (hasRenderable) return;
+            const pic = rasterPics[idx % rasterPics.length];
+            slide.shapes.unshift({
+                type: "image",
+                box: { x: 0, y: 0, cx: slide.size.cx, cy: slide.size.cy },
+                src: pic.dataUrl,
+                mime: pic.mime,
+                isMaster: false
+            });
+            // If there were non-renderable images, keep them after the background.
+            if (hasAnyImage) {
+                // no-op; they remain in shapes after unshift
             }
-
-            if (!hasRenderableImage && mappedPic) {
-                const marginX = Math.round(slide.size.cx * 0.08);
-                const marginY = Math.round(slide.size.cy * 0.25);
-                const width = Math.round(slide.size.cx * 0.84);
-                const height = Math.round(slide.size.cy * 0.62);
-                augmented.push({
-                    type: "image",
-                    box: { x: marginX, y: marginY, cx: width, cy: height },
-                    src: mappedPic.dataUrl,
-                    isMaster: false
-                });
-            }
-
-            slide.shapes = [...augmented, ...slide.shapes];
         });
     }
 
@@ -93,18 +92,22 @@ function extractPptPictures(cfb) {
 }
 
 function isBrowserRenderableImage(mime) {
+    const m = (mime || "").toLowerCase();
     return [
         "image/png",
         "image/jpeg",
+        "image/jpg",
         "image/gif",
         "image/bmp",
         "image/webp",
         "image/avif"
-    ].includes(mime);
+    ].includes(m);
 }
 
 function shapeHasRenderableImage(shape) {
-    if (shape.type !== "image" || !shape.src) return false;
+    if (shape.type !== "image") return false;
+    if (shape.mime && isBrowserRenderableImage(shape.mime)) return true;
+    if (!shape.src) return false;
     return /^data:image\/(png|jpe?g|gif|bmp|webp|avif)/i.test(shape.src);
 }
 
@@ -172,6 +175,12 @@ function extractImagesFromBlob(bytes, label = "Pictures") {
     return results;
 }
 
+function selectRasterPictures(pictures) {
+    return pictures
+        .filter((p) => isBrowserRenderableImage(p.mime || p.dataUrl || ""))
+        .sort((a, b) => (b.dataUrl?.length || 0) - (a.dataUrl?.length || 0));
+}
+
 function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
     if (!texts || texts.length === 0) return [];
 
@@ -216,7 +225,7 @@ function buildPptTextShapesFromList(texts, slideWidthPx, slideHeightPx) {
                     text: titleText, 
                     style: { 
                         fontSize: "38pt",
-                        fontWeight: "normal",
+                        fontWeight: "bold",
                         color: "#000000" 
                     } 
                 }],
@@ -645,20 +654,36 @@ function pptColorFromInt(colorInt) {
 }
 
 function createPptShape(data, slideWidth, slideHeight) {
-    if (!data.bounds || (!data.bounds.left && data.bounds.left !== 0)) return null;
-
-    const { left = 0, top = 0, right = slideWidth, bottom = slideHeight } = data.bounds;
-
     const emusToPixels = (emus) => Math.round(emus / 9525);
 
-    const shape = {
-        type: data.text ? "text" : data.image ? "image" : "shape",
-        box: {
+    // If we have bounds, treat them as EMUs and convert; otherwise use a generous fallback box.
+    let box;
+    if (data.bounds && (data.bounds.left || data.bounds.left === 0)) {
+        const { left = 0, top = 0, right = slideWidth, bottom = slideHeight } = data.bounds;
+        box = {
             x: emusToPixels(left),
             y: emusToPixels(top),
             cx: emusToPixels(right - left),
             cy: emusToPixels(bottom - top)
-        },
+        };
+    } else {
+        // Fallback: center a box that fills ~80% of the slide
+        const fallbackWidth = Math.round(slideWidth * 0.8);
+        const fallbackHeight = Math.round(slideHeight * 0.6);
+        const offsetX = Math.round((slideWidth - fallbackWidth) / 2);
+        const offsetY = Math.round((slideHeight - fallbackHeight) / 2);
+        box = { x: offsetX, y: offsetY, cx: fallbackWidth, cy: fallbackHeight };
+    }
+
+    // Guard against degenerate sizes
+    if (box.cx <= 0 || box.cy <= 0) {
+        box.cx = Math.max(box.cx, Math.round(slideWidth * 0.6));
+        box.cy = Math.max(box.cy, Math.round(slideHeight * 0.6));
+    }
+
+    const shape = {
+        type: data.text ? "text" : data.image ? "image" : "shape",
+        box,
         isMaster: false
     };
 
