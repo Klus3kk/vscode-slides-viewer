@@ -432,7 +432,7 @@ function parseOdpPageLayouts(stylesXml) {
     return layouts;
 }
 
-export async function renderOdpSlides(base64, maxSlides = 20) {
+export async function renderOdpSlides(base64, maxSlides = Infinity) {
     const buffer = decodeBase64ToUint8(base64);
     const zip = await JSZip.loadAsync(buffer);
     const contentXml = await zip.file("content.xml")?.async("text");
@@ -457,7 +457,8 @@ export async function renderOdpSlides(base64, maxSlides = 20) {
     const pages = Array.from(doc.getElementsByTagName("*")).filter((el) => el.localName === "page");
     const slides = [];
 
-    for (const page of pages.slice(0, maxSlides)) {
+    const list = Number.isFinite(maxSlides) ? pages.slice(0, maxSlides) : pages;
+    for (const page of list) {
         const wAttr = page.getAttribute("svg:width") || page.getAttribute("width");
         const hAttr = page.getAttribute("svg:height") || page.getAttribute("height");
         let size = null;

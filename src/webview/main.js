@@ -4,7 +4,7 @@ import { renderOdpSlides } from "./renderers/odp.js";
 import { renderPptSlides } from "./renderers/ppt.js";
 import { renderKeySlides } from "./renderers/key.js";
 
-const MAX_SLIDES = 20;
+const MAX_SLIDES = Infinity;
 const VIEW_WIDTH = 960;
 let slidesCache = [];
 let currentSlide = 0;
@@ -91,6 +91,8 @@ function renderSlidesToHtml(slides) {
                     const top = Math.round(shape.box.y * scale);
                     const width = Math.round(shape.box.cx * scale);
                     const height = Math.round(shape.box.cy * scale);
+                    const rotation = shape.box.rot ? `rotate(${shape.box.rot}deg)` : "";
+                    const transformStyle = rotation ? `transform:${rotation};transform-origin:center center;` : "";
                     
                     console.log("Rendering shape:", {
                         type: shape.type,
@@ -150,7 +152,7 @@ function renderSlidesToHtml(slides) {
                         const viewBox = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
                         const fillColor = shape.fill?.color || "transparent";
                         const strokeStyle = shape.stroke ? `stroke:${shape.stroke.color || "#000"};stroke-width:${shape.stroke.width || 1};stroke-linejoin:round;stroke-linecap:round;` : "";
-                        return `<svg class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;" viewBox="${viewBox}" preserveAspectRatio="none">` +
+                        return `<svg class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${transformStyle}" viewBox="${viewBox}" preserveAspectRatio="none">` +
                             `<path d="${shape.customPath}" fill="${fillColor}" style="${strokeStyle}" />` +
                             `</svg>`;
                     }
@@ -162,7 +164,7 @@ function renderSlidesToHtml(slides) {
                             const label = guessVectorPlaceholderLabel(shape);
                             return `<div class="shape image-shape unsupported" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;border:1px dashed #666;display:flex;align-items:center;justify-content:center;color:#444;font-size:12px;background:linear-gradient(135deg, rgba(0,0,0,0.03), rgba(0,0,0,0.07));text-align:center;padding:4px;box-sizing:border-box;">${escapeHtml(label)}</div>`;
                         }
-                        return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;" src="${shape.src}" alt="" />`;
+                        return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;${transformStyle}" src="${shape.src}" alt="" />`;
                     }
 
                     if (shape.type === "table" && Array.isArray(shape.data)) {
@@ -184,7 +186,7 @@ function renderSlidesToHtml(slides) {
                                 return `<tr>${cells}</tr>`;
                             })
                             .join("");
-                        return `<div class="shape table-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
+                        return `<div class="shape table-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${transformStyle}">` +
                             `<table${tableInline.length ? ` style=\"${tableInline.join(' ')}\"` : ""}>${rowsHtml}</table>` +
                             `</div>`;
                     }
@@ -221,7 +223,7 @@ function renderSlidesToHtml(slides) {
                             .map((name, idx) => `<div class="legend-item"><span class="legend-swatch" style="background:${colors[idx % colors.length]};"></span>${escapeHtml(name)}</div>`)
                             .join("");
 
-                        return `<div class="shape chart-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
+                        return `<div class="shape chart-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${transformStyle}">` +
                             `<div class="chart-grid"></div>` +
                             `<div class="chart-plot" style="height:${height}px;">${barsHtml}${labelsHtml}</div>` +
                             `<div class="chart-legend">${legend}</div>` +

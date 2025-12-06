@@ -1399,7 +1399,8 @@ async function buildFallbackSlidesFromImages(zip, maxSlides) {
     });
 
     const slides = [];
-    for (const name of imageNames.slice(0, maxSlides)) {
+    const list = Number.isFinite(maxSlides) ? imageNames.slice(0, maxSlides) : imageNames;
+    for (const name of list) {
         const file = zip.file(name);
         if (!file) continue;
 
@@ -1430,7 +1431,7 @@ async function buildFallbackSlidesFromImages(zip, maxSlides) {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-export async function renderKeySlides(base64, maxSlides = 20) {
+export async function renderKeySlides(base64, maxSlides = Infinity) {
     try {
         const buffer = decodeBase64ToUint8(base64);
         const zip = await JSZip.loadAsync(buffer);
@@ -1495,7 +1496,7 @@ export async function renderKeySlides(base64, maxSlides = 20) {
         const slides = [];
         for (let sIdx = 0; sIdx < slideNodes.length; sIdx++) {
             const slideNode = slideNodes[sIdx];
-            if (slides.length >= maxSlides) break;
+            if (Number.isFinite(maxSlides) && slides.length >= maxSlides) break;
 
             const masterRef = getMasterRefId(slideNode);
             const inheritedShapes = masterRef && masterShapeMap[masterRef] ? masterShapeMap[masterRef] : [];

@@ -212,11 +212,14 @@ function getShapeBox(shapeEl) {
     const off = Array.from(xfrm.children).find((el) => el.localName === "off");
     const ext = Array.from(xfrm.children).find((el) => el.localName === "ext");
     if (!off || !ext) return undefined;
+    const rotAttr = xfrm.getAttribute("rot");
+    const rot = rotAttr ? parseInt(rotAttr, 10) / 60000 : 0; // PPTX rotation is in 1/60000 degrees
     return {
         x: parseInt(off.getAttribute("x") ?? "0", 10),
         y: parseInt(off.getAttribute("y") ?? "0", 10),
         cx: parseInt(ext.getAttribute("cx") ?? "0", 10),
-        cy: parseInt(ext.getAttribute("cy") ?? "0", 10)
+        cy: parseInt(ext.getAttribute("cy") ?? "0", 10),
+        rot
     };
 }
 
@@ -234,7 +237,7 @@ function getFrameBox(frameEl) {
     };
 }
 
-function getShapeFill(spPr, themeColors = DEFAULT_THEME_COLORS) {
+async function getShapeFill(spPr, themeColors = DEFAULT_THEME_COLORS, rels = {}, currentPath = "", zip = null) {
     if (!spPr) return null;
 
     const solidFill = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "solidFill");
@@ -258,6 +261,38 @@ function getShapeFill(spPr, themeColors = DEFAULT_THEME_COLORS) {
 
     const noFill = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "noFill");
     if (noFill) return { type: "none" };
+
+    const blipFill = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "blipFill");
+    if (blipFill && zip) {
+        const blip = Array.from(blipFill.getElementsByTagName("*")).find((el) => el.localName === "blip");
+        const embed =
+            blip?.getAttribute("r:embed") ||
+            blip?.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
+        if (embed && rels && rels[embed]) {
+            const mediaPath = resolveMediaPath(currentPath, rels[embed]);
+            const mediaFile = zip.file(mediaPath);
+            if (mediaFile) {
+                const ext = mediaPath.split(".").pop()?.toLowerCase();
+                const mimeTypes = {
+                    png: "image/png",
+                    jpg: "image/jpeg",
+                    jpeg: "image/jpeg",
+                    gif: "image/gif",
+                    bmp: "image/bmp",
+                    svg: "image/svg+xml"
+                };
+                const mime = mimeTypes[ext];
+                if (mime) {
+                    try {
+                        const dataUrl = `data:${mime};base64,${await mediaFile.async("base64")}`;
+                        return { type: "image", src: dataUrl };
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+            }
+        }
+    }
 
     return null;
 }
@@ -303,6 +338,14 @@ function getCustomGeometryPath(spPr) {
         } else if (child.localName === "lnTo") {
             const pt = Array.from(child.children).find((el) => el.localName === "pt");
             if (pt) push(`L ${pt.getAttribute("x") || 0} ${pt.getAttribute("y") || 0}`);
+        } else if (child.localName === "cubicBezTo") {
+            const pts = Array.from(child.children).filter((el) => el.localName === "pt");
+            if (pts.length === 3) {
+                const [p1, p2, p3] = pts;
+                push(
+                    `C ${p1.getAttribute("x") || 0} ${p1.getAttribute("y") || 0} ${p2.getAttribute("x") || 0} ${p2.getAttribute("y") || 0} ${p3.getAttribute("x") || 0} ${p3.getAttribute("y") || 0}`
+                );
+            }
         } else if (child.localName === "arcTo") {
             const wR = child.getAttribute("wR") || 0;
             const hR = child.getAttribute("hR") || 0;
@@ -488,6 +531,37 @@ function collectPlaceholderBoxes(spTree) {
         map[`idx:${ph.idx}`] = map[`idx:${ph.idx}`] || box;
     }
     return map;
+}
+
+function isPlaceholderDefaultText(text) {
+    if (!text) return false;
+    const lower = text.toLowerCase().replace(/\s+/g, " ").trim();
+    const defaults = [
+        "click to add title",
+        "click to add subtitle",
+        "click to add text",
+        "click to edit master title style",
+        "click to edit master text styles",
+        "click to edit title style",
+        "click to edit subtitle style",
+        "click to add footer",
+        "click to add date",
+        "double tap to add title",
+        "double tap to add subtitle",
+        "add title",
+        "add subtitle",
+        "add text",
+        "kliknij, aby dodać tytuł",
+        "kliknij, aby dodać tekst",
+        "kliknij aby edytować format tekstu",
+        "kliknij, aby edytować format tekstu",
+        "kliknij, aby dodać stopkę",
+        "kliknij, aby wprowadzić datę",
+        "first / last name",
+        "your company",
+        "your footer here"
+    ];
+    return defaults.some((d) => lower.includes(d));
 }
 
 function getGroupTransform(node) {
@@ -825,11 +899,18 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
 
         if (node.localName === "sp") {
             const spPr = Array.from(node.children).find((el) => el.localName === "spPr");
-            const fill = getShapeFill(spPr, themeColors);
+            const fill = await getShapeFill(spPr, themeColors, rels, currentPath, zip);
             const stroke = getShapeStroke(spPr, themeColors);
             const geom = getShapeGeometry(spPr);
             const customPath = getCustomGeometryPath(spPr);
             const textData = extractTextFromShape(node, rels, themeColors);
+            const combinedText = textData
+                ? textData.paragraphs.map((p) => p.runs.map((r) => r.text || "").join("")).join(" ").trim()
+                : "";
+
+            if (phInfo && combinedText && isPlaceholderDefaultText(combinedText)) {
+                continue;
+            }
 
             if (textData || fill || stroke || customPath) {
                 shapes.push({
@@ -1006,14 +1087,17 @@ async function parseSlideShapes(zip, slidePath, rels, themeColors = DEFAULT_THEM
     }
 }
 
-export async function renderPptxSlides(base64, maxSlides = 20) {
+export async function renderPptxSlides(base64, maxSlides = Infinity) {
     const buffer = decodeBase64ToUint8(base64);
     const zip = await JSZip.loadAsync(buffer);
 
     const themeColors = await getThemeColors(zip);
 
     const slideSize = await getSlideSize(zip);
-    const slidePaths = (await getSlideOrder(zip)).slice(0, maxSlides);
+    let slidePaths = await getSlideOrder(zip);
+    if (Number.isFinite(maxSlides)) {
+        slidePaths = slidePaths.slice(0, maxSlides);
+    }
     const slides = [];
 
     for (let i = 0; i < slidePaths.length; i++) {
