@@ -231,15 +231,16 @@ function renderSlidesToHtml(slides) {
                         if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
                         if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
                         const lowerText = (run.text || "").toLowerCase();
-                        const runForceWhite =
-                            lowerText.includes("some cool header") ||
-                            lowerText.includes("keynotetemplate") ||
-                            lowerText.includes("visit") ||
-                            lowerText.includes(".com") ||
-                            lowerText.includes("http://") ||
-                            lowerText.includes("https://") ||
-                            lowerText.includes("resource");
-                        const forcedWhite = paraForceWhite || runForceWhite;
+                            const runForceWhite =
+                                lowerText.includes("some cool header") ||
+                                lowerText.includes("keynotetemplate") ||
+                                lowerText.includes("visit") ||
+                                lowerText.includes(".com") ||
+                                lowerText.includes("http://") ||
+                                lowerText.includes("https://") ||
+                                lowerText.includes("resource");
+                        const diagramAutoWhite = shape.isDiagram && !run.style.color;
+                        const forcedWhite = paraForceWhite || runForceWhite || diagramAutoWhite;
                         if (run.style.color || forcedWhite) styles.push(`color: ${forcedWhite ? "#ffffff" : run.style.color}`);
                         if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
                         if (run.style.textDecoration) styles.push(`text-decoration: ${run.style.textDecoration}`);
@@ -259,7 +260,7 @@ function renderSlidesToHtml(slides) {
                             const indentPx = Math.max(0, Math.round(((para.marL || 0) + (para.indent || 0)) * scale));
                             const paraStyles = [];
                             paraStyles.push(`text-align:${diagramAlign || textAlign};`);
-                            paraStyles.push(shape.isDiagram ? "padding:0;" : `padding-left:${indentPx}px;`);
+                            paraStyles.push(shape.isDiagram ? "padding:4px 6px;" : `padding-left:${indentPx}px;`);
                             if (para.lineHeight) paraStyles.push(`line-height:${para.lineHeight};`);
                             if (para.spaceBefore) paraStyles.push(`margin-top:${para.spaceBefore.toFixed(2)}px;`);
                             if (para.spaceAfter) paraStyles.push(`margin-bottom:${para.spaceAfter.toFixed(2)}px;`);
@@ -284,9 +285,10 @@ function renderSlidesToHtml(slides) {
                             return `<p class="para" style="${paraStyles.join(' ')}">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
-                        const whiteSpace = (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
+                        const whiteSpace = shape.isDiagram ? "normal" : (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
                         const diagCenter = shape.isDiagram ? "align-items:center;justify-content:center;" : "";
-                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${diagCenter || `align-items:${verticalAlign};justify-content:${verticalAlign};`}border-radius:${borderRadius}px;white-space:${whiteSpace};">${textHtml}</div>`;
+                        const diagPadding = shape.isDiagram ? "padding:6px 8px;" : "";
+                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${diagCenter || `align-items:${verticalAlign};justify-content:${verticalAlign};`}border-radius:${borderRadius}px;white-space:${whiteSpace};${diagPadding}">${textHtml}</div>`;
                     } else {
                         const strokeStyle = stroke ? `border:${Math.max(1, stroke.width || 1)}px solid ${stroke.color || "#000"};` : "";
                         const arrowClip = shape.geom === "rightArrow"

@@ -19,6 +19,30 @@ const DEFAULT_THEME_COLORS = {
     folHlink: "#800080"
 };
 
+async function getThemeColors(zip) {
+    try {
+        const themePath = Object.keys(zip.files)
+            .filter((n) => n.startsWith("ppt/theme/theme") && n.endsWith(".xml"))
+            .sort()[0];
+        if (!themePath) return DEFAULT_THEME_COLORS;
+        const xml = await zip.file(themePath)?.async("text");
+        if (!xml) return DEFAULT_THEME_COLORS;
+        const doc = parseXml(xml);
+        if (!doc) return DEFAULT_THEME_COLORS;
+        const clrScheme = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "clrScheme");
+        if (!clrScheme) return DEFAULT_THEME_COLORS;
+        const colors = { ...DEFAULT_THEME_COLORS };
+        Array.from(clrScheme.children).forEach((child) => {
+            const name = child.localName;
+            const val = getColorFromXml(child, DEFAULT_THEME_COLORS);
+            if (name && val) colors[name] = val;
+        });
+        return colors;
+    } catch (e) {
+        return DEFAULT_THEME_COLORS;
+    }
+}
+
 function getPlaceholderType(shapeNode) {
     const nvSpPr = Array.from(shapeNode.children).find((el) => el.localName === "nvSpPr");
     const nvPr = nvSpPr ? Array.from(nvSpPr.children).find((el) => el.localName === "nvPr") : undefined;
@@ -814,7 +838,7 @@ async function parseDiagramDrawing(zip, diagramPath, frameBox, themeColors = DEF
     }
 }
 
-async function parseSlideShapes(zip, slidePath, rels, themeColors = DEFAULT_THEME_COLORS) {
+async function parseSlideShapes(zip, slidePath, rels, themeColors = DEFAULT_THEME_COLORS, placeholderBoxes = {}) {
     try {
         const xml = await zip.file(slidePath)?.async("text");
         if (!xml) {
@@ -827,7 +851,9 @@ async function parseSlideShapes(zip, slidePath, rels, themeColors = DEFAULT_THEM
         }
 
         const spTree = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "spTree");
-        const shapes = spTree ? await parseShapesFromTree(spTree, rels, slidePath, zip, { isMaster: false, themeColors }) : [];
+        const shapes = spTree
+            ? await parseShapesFromTree(spTree, rels, slidePath, zip, { isMaster: false, themeColors, placeholderBoxes })
+            : [];
         const background = await parseBackground(zip, doc, rels, slidePath, themeColors);
 
         return { shapes, background };
@@ -840,7 +866,7 @@ export async function renderPptxSlides(base64, maxSlides = 20) {
     const buffer = decodeBase64ToUint8(base64);
     const zip = await JSZip.loadAsync(buffer);
 
-    const themeColors = DEFAULT_THEME_COLORS;
+    const themeColors = await getThemeColors(zip);
 
     const slideSize = await getSlideSize(zip);
     const slidePaths = (await getSlideOrder(zip)).slice(0, maxSlides);
@@ -854,7 +880,8 @@ export async function renderPptxSlides(base64, maxSlides = 20) {
             const master = await parseMasterShapes(zip, masterPath, themeColors);
             const layout = await parseLayoutShapes(zip, layoutPath, themeColors);
             const slideRels = await getRelationships(zip, slidePath);
-            const slide = await parseSlideShapes(zip, slidePath, slideRels, themeColors);
+            const placeholderBoxes = { ...(layout.placeholderBoxes || {}), ...(master.placeholderBoxes || {}) };
+            const slide = await parseSlideShapes(zip, slidePath, slideRels, themeColors, placeholderBoxes);
 
             const allShapes = [
                 ...(master.shapes || []),
