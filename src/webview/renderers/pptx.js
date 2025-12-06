@@ -217,16 +217,16 @@ function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLOR
             return null;
         }
 
-        const placeholderType = getPlaceholderType(shapeNode);
-        const shapeDefault = parseRPrStyle(Array.from(txBody.querySelectorAll("defRPr"))[0]);
+    const placeholderType = getPlaceholderType(shapeNode);
+    const shapeDefault = parseRPrStyle(Array.from(txBody.querySelectorAll("defRPr"))[0]);
 
-        const bodyPr = Array.from(txBody.children).find((el) => el.localName === "bodyPr");
-        let verticalAlign = "flex-start";
-        if (bodyPr) {
-            const anchor = bodyPr.getAttribute("anchor");
-            if (anchor === "t") verticalAlign = "flex-start";
-            else if (anchor === "b") verticalAlign = "flex-end";
-            else if (anchor === "ctr") verticalAlign = "center";
+    const bodyPr = Array.from(txBody.children).find((el) => el.localName === "bodyPr");
+    let verticalAlign = placeholderType === "ctrTitle" || placeholderType === "title" ? "center" : "flex-start";
+    if (bodyPr) {
+        const anchor = bodyPr.getAttribute("anchor");
+        if (anchor === "t") verticalAlign = "flex-start";
+        else if (anchor === "b") verticalAlign = "flex-end";
+        else if (anchor === "ctr") verticalAlign = "center";
         }
 
         const paragraphs = Array.from(txBody.getElementsByTagName("*")).filter((el) => el.localName === "p");
@@ -325,7 +325,9 @@ function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLOR
             }
 
             if (runData.length > 0) {
-                textData.push({ align, runs: runData, bullet, level, marL, indent, lineHeight, spaceBefore, spaceAfter });
+                const resolvedAlign =
+                    align === "left" && (placeholderType === "title" || placeholderType === "ctrTitle") ? "center" : align;
+                textData.push({ align: resolvedAlign, runs: runData, bullet, level, marL, indent, lineHeight, spaceBefore, spaceAfter });
             }
         }
 
@@ -880,7 +882,7 @@ export async function renderPptxSlides(base64, maxSlides = 20) {
             const master = await parseMasterShapes(zip, masterPath, themeColors);
             const layout = await parseLayoutShapes(zip, layoutPath, themeColors);
             const slideRels = await getRelationships(zip, slidePath);
-            const placeholderBoxes = { ...(layout.placeholderBoxes || {}), ...(master.placeholderBoxes || {}) };
+            const placeholderBoxes = { ...(master.placeholderBoxes || {}), ...(layout.placeholderBoxes || {}) };
             const slide = await parseSlideShapes(zip, slidePath, slideRels, themeColors, placeholderBoxes);
 
             const allShapes = [
