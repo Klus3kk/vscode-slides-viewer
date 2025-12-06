@@ -1,4 +1,4 @@
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, guessVectorPlaceholderLabel}  from "./utils.js";
 import { renderPptxSlides } from "./renderers/pptx.js";
 import { renderOdpSlides } from "./renderers/odp.js";
 import { renderPptSlides } from "./renderers/ppt.js";
