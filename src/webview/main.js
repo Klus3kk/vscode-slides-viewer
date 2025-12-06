@@ -128,6 +128,33 @@ function renderSlidesToHtml(slides) {
                         borderRadius = Math.min(width, height) / 2;
                     }
 
+                    if (shape.customPath) {
+                        const nums = Array.from(shape.customPath.matchAll(/-?\d+\.?\d*/g))
+                            .map((m) => parseFloat(m[0]))
+                            .filter((n) => !isNaN(n));
+                        let minX = 0, minY = 0, maxX = 21600, maxY = 21600;
+                        if (nums.length >= 2) {
+                            const xs = nums.filter((_, idx) => idx % 2 === 0);
+                            const ys = nums.filter((_, idx) => idx % 2 === 1);
+                            minX = Math.min(...xs);
+                            maxX = Math.max(...xs);
+                            minY = Math.min(...ys);
+                            maxY = Math.max(...ys);
+                            if (!isFinite(minX) || !isFinite(maxX) || minX === maxX) {
+                                minX = 0; maxX = 21600;
+                            }
+                            if (!isFinite(minY) || !isFinite(maxY) || minY === maxY) {
+                                minY = 0; maxY = 21600;
+                            }
+                        }
+                        const viewBox = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
+                        const fillColor = shape.fill?.color || "transparent";
+                        const strokeStyle = shape.stroke ? `stroke:${shape.stroke.color || "#000"};stroke-width:${shape.stroke.width || 1};stroke-linejoin:round;stroke-linecap:round;` : "";
+                        return `<svg class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;" viewBox="${viewBox}" preserveAspectRatio="none">` +
+                            `<path d="${shape.customPath}" fill="${fillColor}" style="${strokeStyle}" />` +
+                            `</svg>`;
+                    }
+
                     if (shape.type === "image") {
                         const isEmf = (shape.mime || "").includes("emf") || (shape.src || "").includes("image/emf");
                         const isWmf = (shape.mime || "").includes("wmf") || (shape.src || "").includes("image/wmf");

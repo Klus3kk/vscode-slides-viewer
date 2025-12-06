@@ -283,6 +283,37 @@ function getShapeGeometry(spPr) {
     return prstGeom?.getAttribute("prst") || null;
 }
 
+function getCustomGeometryPath(spPr) {
+    if (!spPr) return null;
+    const custGeom = Array.from(spPr.getElementsByTagName("*")).find((el) => el.localName === "custGeom");
+    if (!custGeom) return null;
+    const pathLst = Array.from(custGeom.children).find((el) => el.localName === "pathLst");
+    if (!pathLst) return null;
+    const path = Array.from(pathLst.children).find((el) => el.localName === "path");
+    if (!path) return null;
+    let d = "";
+    const push = (s) => {
+        if (d) d += " ";
+        d += s;
+    };
+    Array.from(path.children).forEach((child) => {
+        if (child.localName === "moveTo") {
+            const pt = Array.from(child.children).find((el) => el.localName === "pt");
+            if (pt) push(`M ${pt.getAttribute("x") || 0} ${pt.getAttribute("y") || 0}`);
+        } else if (child.localName === "lnTo") {
+            const pt = Array.from(child.children).find((el) => el.localName === "pt");
+            if (pt) push(`L ${pt.getAttribute("x") || 0} ${pt.getAttribute("y") || 0}`);
+        } else if (child.localName === "arcTo") {
+            const wR = child.getAttribute("wR") || 0;
+            const hR = child.getAttribute("hR") || 0;
+            push(`A ${wR} ${hR} 0 0 1 ${child.getAttribute("stAng") || 0} ${child.getAttribute("swAng") || 0}`);
+        } else if (child.localName === "close") {
+            push("Z");
+        }
+    });
+    return d || null;
+}
+
 function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLORS) {
     try {
         const txBody = Array.from(shapeNode.children).find((el) => el.localName === "txBody");
@@ -797,9 +828,10 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
             const fill = getShapeFill(spPr, themeColors);
             const stroke = getShapeStroke(spPr, themeColors);
             const geom = getShapeGeometry(spPr);
+            const customPath = getCustomGeometryPath(spPr);
             const textData = extractTextFromShape(node, rels, themeColors);
 
-            if (textData || fill || stroke) {
+            if (textData || fill || stroke || customPath) {
                 shapes.push({
                     type: textData ? "text" : "shape",
                     box,
@@ -807,6 +839,7 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
                     stroke,
                     textData,
                     geom,
+                    customPath,
                     isMaster
                 });
             }
