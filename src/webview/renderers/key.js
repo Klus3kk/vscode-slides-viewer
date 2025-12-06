@@ -361,6 +361,25 @@ async function extractFillFromNode(node, graphicStyleIndex, imageBinaryIndex, zi
     return { type: "solid", color: col };
 }
 
+function extractStrokeFromNode(node) {
+    if (!node) return null;
+    const strokeEl = Array.from(node.getElementsByTagName("*")).find((el) => el.localName === "stroke");
+    if (!strokeEl) return null;
+
+    const color = extractColorFromElement(strokeEl);
+    const widthAttr =
+        strokeEl.getAttribute("sfa:width") ||
+        strokeEl.getAttribute("width") ||
+        strokeEl.getAttribute("sf:width");
+    const width = widthAttr != null ? parseFloat(widthAttr) : null;
+
+    if (!color && (width == null || Number.isNaN(width))) return null;
+    return {
+        color: color || "#000000",
+        width: !Number.isNaN(width) && width != null ? width : 1
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Text style system (Keynote APXL)
 // ---------------------------------------------------------------------------
@@ -944,6 +963,67 @@ async function buildImageShapeFromElement(zip, fileNames, imageBinaryIndex, imag
     };
 }
 
+function extractCellText(cell) {
+    if (!cell) return "";
+    const textStorage = Array.from(cell.getElementsByTagName("*")).find(
+        (c) => c.localName === "text-storage" || c.localName === "textStorage"
+    );
+    if (textStorage) {
+        return (textStorage.textContent || "").trim();
+    }
+    return (cell.textContent || "").trim();
+}
+
+async function buildTableShapeFromElement(tableEl, slideSize, isMasterShape = false) {
+    const geometryEl = findNearestGeometry(tableEl);
+    const box = getGeometryBox(geometryEl, slideSize);
+
+    const cellEls = Array.from(tableEl.getElementsByTagName("*")).filter(
+        (el) => el.localName === "cell" || el.localName === "table-cell"
+    );
+    if (!cellEls.length) return null;
+
+    let maxRow = 0;
+    let maxCol = 0;
+    const cells = [];
+
+    for (const cell of cellEls) {
+        const rowAttr =
+            cell.getAttribute("row") ||
+            cell.getAttribute("sf:row") ||
+            cell.getAttribute("sfa:row");
+        const colAttr =
+            cell.getAttribute("column") ||
+            cell.getAttribute("col") ||
+            cell.getAttribute("sf:column") ||
+            cell.getAttribute("sfa:column");
+        const rIdx = rowAttr != null ? parseInt(rowAttr, 10) : 0;
+        const cIdx = colAttr != null ? parseInt(colAttr, 10) : 0;
+        maxRow = Math.max(maxRow, rIdx);
+        maxCol = Math.max(maxCol, cIdx);
+        const txt = extractCellText(cell);
+        cells.push({ r: rIdx, c: cIdx, text: txt });
+    }
+
+    const rows = [];
+    for (let r = 0; r <= maxRow; r++) {
+        const row = new Array(maxCol + 1).fill("");
+        rows.push(row);
+    }
+    for (const { r, c, text } of cells) {
+        if (!rows[r]) rows[r] = [];
+        rows[r][c] = text || "";
+    }
+
+    return {
+        type: "table",
+        box,
+        data: rows,
+        isMaster: isMasterShape,
+        renderer: "key"
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Text and vector shapes
 // ---------------------------------------------------------------------------
@@ -977,6 +1057,11 @@ async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyl
             styleIndex,
             getStyleRefFromNode(p)
         );
+        const listLevelAttr =
+            p.getAttribute("sf:list-level") ||
+            p.getAttribute("list-level") ||
+            p.getAttribute("sfa:list-level");
+        const listLevel = listLevelAttr ? parseInt(listLevelAttr, 10) : 0;
 
         const runEls = Array.from(p.getElementsByTagName("*")).filter(
             (el) => el.localName === "run" || el.localName === "r" || el.localName === "span"
@@ -994,9 +1079,15 @@ async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyl
                     getStyleRefFromNode(r)
                 );
                 const merged = mergeTextStyles(baseParaStyle, charStyle);
+                const href =
+                    r.getAttribute("href") ||
+                    r.getAttribute("url") ||
+                    r.getAttribute("sf:href") ||
+                    r.getAttribute("sf:url");
                 runs.push({
                     text: txt,
-                    style: styleToViewerRunStyle(merged)
+                    style: styleToViewerRunStyle(merged),
+                    href: href || null
                 });
             }
         } else {
@@ -1005,7 +1096,8 @@ async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyl
                 const merged = baseParaStyle;
                 runs.push({
                     text: txt,
-                    style: styleToViewerRunStyle(merged)
+                    style: styleToViewerRunStyle(merged),
+                    href: null
                 });
             }
         }
@@ -1017,10 +1109,10 @@ async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyl
         paraData.push({
             align,
             runs,
-            bullet: null,
-            level: 0,
-            marL: 0,
-            indent: 0
+            bullet: listLevel > 0 ? { type: "char", char: "•" } : null,
+            level: listLevel,
+            marL: listLevel > 0 ? listLevel * 18 : 0,
+            indent: listLevel > 0 ? listLevel * 6 : 0
         });
     }
 
@@ -1063,7 +1155,8 @@ async function extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, im
     }
 
     const fill = await extractFillFromNode(styleEl || node, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
-    if (!fill || fill.type === "none") return null;
+    const stroke = extractStrokeFromNode(styleEl || node);
+    if ((!fill || fill.type === "none") && !stroke) return null;
 
     const geometryEl = findNearestGeometry(node);
     const box = getGeometryBox(geometryEl, slideSize);
@@ -1074,8 +1167,10 @@ async function extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, im
         type: "shape",
         box,
         fill,
+        stroke,
         geom,
-        isMaster: isMasterShape
+        isMaster: isMasterShape,
+        renderer: "key"
     };
 }
 
@@ -1131,6 +1226,13 @@ async function collectShapesForSlide(
                 if (child.localName === "image-media") continue;
                 walk(child);
             }
+            return;
+        }
+
+        if (ln === "table") {
+            imagePromises.push(
+                Promise.resolve(buildTableShapeFromElement(node, slideSize, markAsMaster))
+            );
             return;
         }
 
