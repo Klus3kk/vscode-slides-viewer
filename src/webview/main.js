@@ -135,15 +135,26 @@ function renderSlidesToHtml(slides) {
                     }
 
                     if (shape.type === "table" && Array.isArray(shape.data)) {
+                        const tblStyle = shape.tableStyle || {};
+                        const tableInline = [];
+                        if (tblStyle.borderColor) {
+                            tableInline.push(`border:1px solid ${tblStyle.borderColor};`);
+                        }
                         const rowsHtml = shape.data
                             .map((row, idx) => {
                                 const tag = idx === 0 ? "th" : "td";
-                                const cells = row.map((cell) => `<${tag}>${escapeHtml(cell || "")}</${tag}>`).join("");
+                                const cells = row
+                                    .map((cell) => {
+                                        const cellStyle = [];
+                                        if (tblStyle.cellFill) cellStyle.push(`background:${tblStyle.cellFill};`);
+                                        return `<${tag}${cellStyle.length ? ` style=\"${cellStyle.join(' ')}\"` : ""}>${escapeHtml(cell || "")}</${tag}>`;
+                                    })
+                                    .join("");
                                 return `<tr>${cells}</tr>`;
                             })
                             .join("");
                         return `<div class="shape table-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
-                            `<table>${rowsHtml}</table>` +
+                            `<table${tableInline.length ? ` style=\"${tableInline.join(' ')}\"` : ""}>${rowsHtml}</table>` +
                             `</div>`;
                     }
 
@@ -200,12 +211,12 @@ function renderSlidesToHtml(slides) {
                                 return lower.includes("http://") || lower.includes("https://") || lower.includes(".com");
                             })
                         );
-                        const textHtml = shape.textData.paragraphs.map(para => {
-                            const paraTextLower = para.runs.map(r => (r.text || "").toLowerCase()).join(" ");
-                            const paraContainsUrl =
-                                paraTextLower.includes("http://") ||
-                                paraTextLower.includes("https://") ||
-                                paraTextLower.includes(".com");
+                    const textHtml = shape.textData.paragraphs.map(para => {
+                        const paraTextLower = para.runs.map(r => (r.text || "").toLowerCase()).join(" ");
+                        const paraContainsUrl =
+                            paraTextLower.includes("http://") ||
+                            paraTextLower.includes("https://") ||
+                            paraTextLower.includes(".com");
                             const paraForceWhite =
                                 paraTextLower.includes("keynotetemplate") ||
                                 paraTextLower.includes("visit") ||
@@ -230,6 +241,8 @@ function renderSlidesToHtml(slides) {
                         const forcedWhite = paraForceWhite || runForceWhite;
                         if (run.style.color || forcedWhite) styles.push(`color: ${forcedWhite ? "#ffffff" : run.style.color}`);
                         if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
+                        if (run.style.textDecoration) styles.push(`text-decoration: ${run.style.textDecoration}`);
+                        if (run.style.letterSpacing) styles.push(`letter-spacing: ${run.style.letterSpacing}`);
                         
                         const styleAttr = styles.length > 0 ? ` style="${styles.join('; ')}"` : '';
                         const safeText = escapeHtml(run.text).replace(/\n/g, "<br/>");
@@ -242,6 +255,12 @@ function renderSlidesToHtml(slides) {
                             
                             const textAlign = para.align || 'left';
                             const indentPx = Math.max(0, Math.round(((para.marL || 0) + (para.indent || 0)) * scale));
+                            const paraStyles = [];
+                            paraStyles.push(`text-align:${textAlign};`);
+                            paraStyles.push(`padding-left:${indentPx}px;`);
+                            if (para.lineHeight) paraStyles.push(`line-height:${para.lineHeight};`);
+                            if (para.spaceBefore) paraStyles.push(`margin-top:${para.spaceBefore.toFixed(2)}px;`);
+                            if (para.spaceAfter) paraStyles.push(`margin-bottom:${para.spaceAfter.toFixed(2)}px;`);
                             let bulletHtml = "";
                             if (para.bullet?.type === "char") {
                                 const bulletSize = para.runs[0]?.style.fontSize ? `font-size:${para.runs[0].style.fontSize}` : "";
@@ -258,7 +277,9 @@ function renderSlidesToHtml(slides) {
                                 paraContainsUrl || (multipleParas && textAlign === "center") || (textAlign === "center" && paraTextLower.length > 30)
                                     ? "left"
                                     : textAlign;
-                            return `<p class="para" style="text-align:${resolvedAlign}; padding-left:${indentPx}px;">${bulletHtml}<span>${runHtml}</span></p>`;
+                            // overwrite alignment last to keep resolvedAlign
+                            paraStyles[0] = `text-align:${resolvedAlign};`;
+                            return `<p class="para" style="${paraStyles.join(' ')}">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
                         const whiteSpace = (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
@@ -301,8 +322,19 @@ window.addEventListener("message", async (event) => {
             document.body.dataset.loaded = "true";
             
             const lowerName = msg.fileName?.toLowerCase() || "";
+            const isPptxLike =
+                lowerName.endsWith(".pptx") ||
+                lowerName.endsWith(".pptm") ||
+                lowerName.endsWith(".potx") ||
+                lowerName.endsWith(".potm") ||
+                lowerName.endsWith(".ppsx") ||
+                lowerName.endsWith(".ppsm");
+            const isPptLike =
+                lowerName.endsWith(".ppt") ||
+                lowerName.endsWith(".pps") ||
+                lowerName.endsWith(".pot");
 
-            if (lowerName.endsWith(".pptx")) {
+            if (isPptxLike) {
                 const slides = await renderPptxSlides(msg.base64, MAX_SLIDES);
                 slidesCache = slides;
                 
@@ -318,7 +350,7 @@ window.addEventListener("message", async (event) => {
                 updateSlideVisibility();
                 applyZoom();
                 updatePageInfo();
-            } else if (lowerName.endsWith(".ppt")) {
+            } else if (isPptLike) {
                 const slides = await renderPptSlides(msg.base64);
                 slidesCache = slides;
 

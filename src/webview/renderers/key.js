@@ -223,8 +223,32 @@ async function resolveImageRef(pathAttr, zip, fileNames) {
     if (!zip || !fileNames || !pathAttr) return null;
     const file = findAssetFile(zip, fileNames, pathAttr);
     if (!file) return null;
+    
     const bytes = await file.async("uint8array");
-    const mime = guessMimeFromBytes(pathAttr, bytes);
+    const lower = (pathAttr || "").toLowerCase();
+    let mime = guessMimeFromBytes(pathAttr, bytes);
+    
+    if (lower.endsWith(".svg") || (bytes[0] === 0x3c && (bytes[1] === 0x3f || bytes[1] === 0x73))) {
+        mime = "image/svg+xml";
+        try {
+            const svgText = await file.async("text");
+            const blob = new Blob([svgText], { type: "image/svg+xml" });
+            const base64 = uint8ToBase64(new Uint8Array(await blob.arrayBuffer()));
+            return {
+                src: `data:image/svg+xml;base64,${base64}`,
+                mime: "image/svg+xml"
+            };
+        } catch (e) {
+            console.warn("Failed to load SVG:", e);
+        }
+    }
+    
+    if (lower.endsWith(".tif") || lower.endsWith(".tiff") ||
+        (bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00) ||
+        (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a)) {
+        mime = "image/tiff";
+    }
+    
     return {
         src: `data:${mime};base64,${uint8ToBase64(bytes)}`,
         mime

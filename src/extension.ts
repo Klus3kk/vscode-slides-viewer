@@ -2,7 +2,19 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
-const PRESENTATION_EXTENSIONS = [".pptx", ".ppt", ".odp", ".key"];
+const PRESENTATION_EXTENSIONS = [
+  ".pptx",
+  ".pptm",
+  ".potx",
+  ".potm",
+  ".ppsx",
+  ".ppsm",
+  ".ppt",
+  ".pps",
+  ".pot",
+  ".odp",
+  ".key"
+];
 const VIEW_TYPE = "presentationViewer.viewer";
 const channel = vscode.window.createOutputChannel("Presentation Viewer");
 
@@ -39,7 +51,9 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       if (!isPresentationFile(targetUri.fsPath)) {
-        void vscode.window.showWarningMessage("Select a .pptx, .ppt, .odp or .key file to open.");
+        void vscode.window.showWarningMessage(
+          "Select a .pptx/.pptm/.potx/.potm/.ppsx/.ppsm, .ppt/.pps/.pot, .odp or .key file to open."
+        );
         return;
       }
 
@@ -163,7 +177,19 @@ function closeIfActive(document: vscode.TextDocument) {
 async function pickPresentationFile(): Promise<vscode.Uri | undefined> {
   const picked = await vscode.window.showOpenDialog({
     filters: {
-      Presentations: ["pptx", "ppt", "odp", "key"]
+      Presentations: [
+        "pptx",
+        "pptm",
+        "potx",
+        "potm",
+        "ppsx",
+        "ppsm",
+        "ppt",
+        "pps",
+        "pot",
+        "odp",
+        "key"
+      ]
     },
     canSelectMany: false,
     openLabel: "Open presentation"
