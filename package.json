@@ -15,7 +15,14 @@
   "activationEvents": [
     "onStartupFinished",
     "workspaceContains:**/*.pptx",
+    "workspaceContains:**/*.pptm",
+    "workspaceContains:**/*.potx",
+    "workspaceContains:**/*.potm",
+    "workspaceContains:**/*.ppsx",
+    "workspaceContains:**/*.ppsm",
     "workspaceContains:**/*.ppt",
+    "workspaceContains:**/*.pps",
+    "workspaceContains:**/*.pot",
     "workspaceContains:**/*.odp",
     "workspaceContains:**/*.key",
     "onCustomEditor:presentationViewer.viewer",
@@ -37,13 +44,20 @@
       {
         "id": "pptx",
         "extensions": [
-          ".pptx"
+          ".pptx",
+          ".pptm",
+          ".potx",
+          ".potm",
+          ".ppsx",
+          ".ppsm"
         ]
       },
       {
         "id": "ppt",
         "extensions": [
-          ".ppt"
+          ".ppt",
+          ".pps",
+          ".pot"
         ]
       },
       {
@@ -68,7 +82,28 @@
             "filenamePattern": "*.pptx"
           },
           {
+            "filenamePattern": "*.pptm"
+          },
+          {
+            "filenamePattern": "*.potx"
+          },
+          {
+            "filenamePattern": "*.potm"
+          },
+          {
+            "filenamePattern": "*.ppsx"
+          },
+          {
+            "filenamePattern": "*.ppsm"
+          },
+          {
             "filenamePattern": "*.ppt"
+          },
+          {
+            "filenamePattern": "*.pps"
+          },
+          {
+            "filenamePattern": "*.pot"
           },
           {
             "filenamePattern": "*.odp"

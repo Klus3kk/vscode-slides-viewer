@@ -4,7 +4,7 @@ import { renderOdpSlides } from "./renderers/odp.js";
 import { renderPptSlides } from "./renderers/ppt.js";
 import { renderKeySlides } from "./renderers/key.js";
 
-const MAX_SLIDES = 20;
+const MAX_SLIDES = Infinity;
 const VIEW_WIDTH = 960;
 let slidesCache = [];
 let currentSlide = 0;
@@ -91,6 +91,8 @@ function renderSlidesToHtml(slides) {
                     const top = Math.round(shape.box.y * scale);
                     const width = Math.round(shape.box.cx * scale);
                     const height = Math.round(shape.box.cy * scale);
+                    const rotation = shape.box.rot ? `rotate(${shape.box.rot}deg)` : "";
+                    const transformStyle = rotation ? `transform:${rotation};transform-origin:center center;` : "";
                     
                     console.log("Rendering shape:", {
                         type: shape.type,
@@ -105,9 +107,13 @@ function renderSlidesToHtml(slides) {
                             bgStyle = `background: ${shape.fill.color};`;
                         } else if (shape.fill.type === 'image') {
                             bgStyle = `background: url(${shape.fill.src}) center/cover no-repeat;`;
-                        } else if (shape.fill.type === 'gradient' && Array.isArray(shape.fill.colors)) {
-                            const g = shape.fill.colors;
-                            bgStyle = `background: linear-gradient(135deg, ${g[0]}, ${g[g.length - 1]});`;
+                        } else if (shape.fill.type === 'gradient' && Array.isArray(shape.fill.stops)) {
+                            const stops = shape.fill.stops;
+                            const parts = stops.map((s, idx) => {
+                                const pct = s.pos != null ? `${(s.pos / 1000).toFixed(1)}%` : `${Math.round((idx / Math.max(1, stops.length - 1)) * 100)}%`;
+                                return `${s.color} ${pct}`;
+                            });
+                            bgStyle = `background: linear-gradient(135deg, ${parts.join(", ")});`;
                         } else if (shape.fill.type === 'none') {
                             bgStyle = 'background: transparent;';
                         }
@@ -124,6 +130,33 @@ function renderSlidesToHtml(slides) {
                         borderRadius = Math.min(width, height) / 2;
                     }
 
+                    if (shape.customPath) {
+                        const nums = Array.from(shape.customPath.matchAll(/-?\d+\.?\d*/g))
+                            .map((m) => parseFloat(m[0]))
+                            .filter((n) => !isNaN(n));
+                        let minX = 0, minY = 0, maxX = 21600, maxY = 21600;
+                        if (nums.length >= 2) {
+                            const xs = nums.filter((_, idx) => idx % 2 === 0);
+                            const ys = nums.filter((_, idx) => idx % 2 === 1);
+                            minX = Math.min(...xs);
+                            maxX = Math.max(...xs);
+                            minY = Math.min(...ys);
+                            maxY = Math.max(...ys);
+                            if (!isFinite(minX) || !isFinite(maxX) || minX === maxX) {
+                                minX = 0; maxX = 21600;
+                            }
+                            if (!isFinite(minY) || !isFinite(maxY) || minY === maxY) {
+                                minY = 0; maxY = 21600;
+                            }
+                        }
+                        const viewBox = `${minX} ${minY} ${maxX - minX} ${maxY - minY}`;
+                        const fillColor = shape.fill?.color || "transparent";
+                        const strokeStyle = shape.stroke ? `stroke:${shape.stroke.color || "#000"};stroke-width:${shape.stroke.width || 1};stroke-linejoin:round;stroke-linecap:round;` : "";
+                        return `<svg class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${transformStyle}" viewBox="${viewBox}" preserveAspectRatio="none">` +
+                            `<path d="${shape.customPath}" fill="${fillColor}" style="${strokeStyle}" />` +
+                            `</svg>`;
+                    }
+
                     if (shape.type === "image") {
                         const isEmf = (shape.mime || "").includes("emf") || (shape.src || "").includes("image/emf");
                         const isWmf = (shape.mime || "").includes("wmf") || (shape.src || "").includes("image/wmf");
@@ -131,19 +164,30 @@ function renderSlidesToHtml(slides) {
                             const label = guessVectorPlaceholderLabel(shape);
                             return `<div class="shape image-shape unsupported" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;border:1px dashed #666;display:flex;align-items:center;justify-content:center;color:#444;font-size:12px;background:linear-gradient(135deg, rgba(0,0,0,0.03), rgba(0,0,0,0.07));text-align:center;padding:4px;box-sizing:border-box;">${escapeHtml(label)}</div>`;
                         }
-                        return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;" src="${shape.src}" alt="" />`;
+                        return `<img class="shape image-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;border-radius:${borderRadius}px;${transformStyle}" src="${shape.src}" alt="" />`;
                     }
 
                     if (shape.type === "table" && Array.isArray(shape.data)) {
+                        const tblStyle = shape.tableStyle || {};
+                        const tableInline = [];
+                        if (tblStyle.borderColor) {
+                            tableInline.push(`border:1px solid ${tblStyle.borderColor};`);
+                        }
                         const rowsHtml = shape.data
                             .map((row, idx) => {
                                 const tag = idx === 0 ? "th" : "td";
-                                const cells = row.map((cell) => `<${tag}>${escapeHtml(cell || "")}</${tag}>`).join("");
+                                const cells = row
+                                    .map((cell) => {
+                                        const cellStyle = [];
+                                        if (tblStyle.cellFill) cellStyle.push(`background:${tblStyle.cellFill};`);
+                                        return `<${tag}${cellStyle.length ? ` style=\"${cellStyle.join(' ')}\"` : ""}>${escapeHtml(cell || "")}</${tag}>`;
+                                    })
+                                    .join("");
                                 return `<tr>${cells}</tr>`;
                             })
                             .join("");
-                        return `<div class="shape table-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
-                            `<table>${rowsHtml}</table>` +
+                        return `<div class="shape table-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${transformStyle}">` +
+                            `<table${tableInline.length ? ` style=\"${tableInline.join(' ')}\"` : ""}>${rowsHtml}</table>` +
                             `</div>`;
                     }
 
@@ -179,16 +223,17 @@ function renderSlidesToHtml(slides) {
                             .map((name, idx) => `<div class="legend-item"><span class="legend-swatch" style="background:${colors[idx % colors.length]};"></span>${escapeHtml(name)}</div>`)
                             .join("");
 
-                        return `<div class="shape chart-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;">` +
+                        return `<div class="shape chart-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${transformStyle}">` +
                             `<div class="chart-grid"></div>` +
                             `<div class="chart-plot" style="height:${height}px;">${barsHtml}${labelsHtml}</div>` +
                             `<div class="chart-legend">${legend}</div>` +
                             `</div>`;
                     }
-                    
+
                     if (shape.textData) {
                         console.log(`Rendering text with ${shape.textData.paragraphs.length} paragraphs`);
-                        const verticalAlign = shape.textData.verticalAlign || 'center';
+                        let verticalAlign = shape.textData.verticalAlign || 'center';
+                        if (shape.isDiagram) verticalAlign = 'center';
                         const multipleParas = shape.textData.paragraphs.length > 1;
                         const isHeadline =
                             shape.textData.paragraphs.length === 1 &&
@@ -200,12 +245,12 @@ function renderSlidesToHtml(slides) {
                                 return lower.includes("http://") || lower.includes("https://") || lower.includes(".com");
                             })
                         );
-                        const textHtml = shape.textData.paragraphs.map(para => {
-                            const paraTextLower = para.runs.map(r => (r.text || "").toLowerCase()).join(" ");
-                            const paraContainsUrl =
-                                paraTextLower.includes("http://") ||
-                                paraTextLower.includes("https://") ||
-                                paraTextLower.includes(".com");
+                    const textHtml = shape.textData.paragraphs.map(para => {
+                        const paraTextLower = para.runs.map(r => (r.text || "").toLowerCase()).join(" ");
+                        const paraContainsUrl =
+                            paraTextLower.includes("http://") ||
+                            paraTextLower.includes("https://") ||
+                            paraTextLower.includes(".com");
                             const paraForceWhite =
                                 paraTextLower.includes("keynotetemplate") ||
                                 paraTextLower.includes("visit") ||
@@ -219,17 +264,21 @@ function renderSlidesToHtml(slides) {
                         if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
                         if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
                         const lowerText = (run.text || "").toLowerCase();
-                        const runForceWhite =
-                            lowerText.includes("some cool header") ||
-                            lowerText.includes("keynotetemplate") ||
-                            lowerText.includes("visit") ||
-                            lowerText.includes(".com") ||
-                            lowerText.includes("http://") ||
-                            lowerText.includes("https://") ||
-                            lowerText.includes("resource");
-                        const forcedWhite = paraForceWhite || runForceWhite;
-                        if (run.style.color || forcedWhite) styles.push(`color: ${forcedWhite ? "#ffffff" : run.style.color}`);
+                            const runForceWhite =
+                                lowerText.includes("some cool header") ||
+                                lowerText.includes("keynotetemplate") ||
+                                lowerText.includes("visit") ||
+                                lowerText.includes(".com") ||
+                                lowerText.includes("http://") ||
+                                lowerText.includes("https://") ||
+                                lowerText.includes("resource");
+                        const diagramAutoWhite = shape.isDiagram && !run.style.color;
+                        const forcedWhite = paraForceWhite || runForceWhite || diagramAutoWhite;
+                        const resolvedColor = forcedWhite ? "#ffffff" : (run.style.color || "#111111");
+                        styles.push(`color: ${resolvedColor}`);
                         if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
+                        if (run.style.textDecoration) styles.push(`text-decoration: ${run.style.textDecoration}`);
+                        if (run.style.letterSpacing) styles.push(`letter-spacing: ${run.style.letterSpacing}`);
                         
                         const styleAttr = styles.length > 0 ? ` style="${styles.join('; ')}"` : '';
                         const safeText = escapeHtml(run.text).replace(/\n/g, "<br/>");
@@ -241,7 +290,14 @@ function renderSlidesToHtml(slides) {
                     }).join('');
                             
                             const textAlign = para.align || 'left';
+                            const diagramAlign = shape.isDiagram ? 'center' : null;
                             const indentPx = Math.max(0, Math.round(((para.marL || 0) + (para.indent || 0)) * scale));
+                            const paraStyles = [];
+                            paraStyles.push(`text-align:${diagramAlign || textAlign};`);
+                            paraStyles.push(shape.isDiagram ? "padding:4px 6px;" : `padding-left:${indentPx}px;`);
+                            if (para.lineHeight) paraStyles.push(`line-height:${para.lineHeight};`);
+                            if (para.spaceBefore) paraStyles.push(`margin-top:${para.spaceBefore.toFixed(2)}px;`);
+                            if (para.spaceAfter) paraStyles.push(`margin-bottom:${para.spaceAfter.toFixed(2)}px;`);
                             let bulletHtml = "";
                             if (para.bullet?.type === "char") {
                                 const bulletSize = para.runs[0]?.style.fontSize ? `font-size:${para.runs[0].style.fontSize}` : "";
@@ -258,14 +314,21 @@ function renderSlidesToHtml(slides) {
                                 paraContainsUrl || (multipleParas && textAlign === "center") || (textAlign === "center" && paraTextLower.length > 30)
                                     ? "left"
                                     : textAlign;
-                            return `<p class="para" style="text-align:${resolvedAlign}; padding-left:${indentPx}px;">${bulletHtml}<span>${runHtml}</span></p>`;
+                            // overwrite alignment last to keep resolvedAlign
+                            paraStyles[0] = `text-align:${diagramAlign || resolvedAlign};`;
+                            return `<p class="para" style="${paraStyles.join(' ')}">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
-                        const whiteSpace = (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
-                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};border-radius:${borderRadius}px;white-space:${whiteSpace};">${textHtml}</div>`;
+                        const whiteSpace = shape.isDiagram ? "normal" : (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
+                        const diagCenter = shape.isDiagram ? "align-items:center;justify-content:center;" : "";
+                        const diagPadding = shape.isDiagram ? "padding:6px 8px;" : "";
+                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${diagCenter || `align-items:${verticalAlign};justify-content:${verticalAlign};`}border-radius:${borderRadius}px;white-space:${whiteSpace};${diagPadding}">${textHtml}</div>`;
                     } else {
                         const strokeStyle = stroke ? `border:${Math.max(1, stroke.width || 1)}px solid ${stroke.color || "#000"};` : "";
-                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${strokeStyle}border-radius:${borderRadius}px;"></div>`;
+                        const arrowClip = shape.geom === "rightArrow"
+                            ? "clip-path: polygon(0% 25%, 70% 25%, 70% 0%, 100% 50%, 70% 100%, 70% 75%, 0% 75%);"
+                            : "";
+                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${strokeStyle}border-radius:${borderRadius}px;${arrowClip}"></div>`;
                     }
                 })
                 .join("");
@@ -301,8 +364,19 @@ window.addEventListener("message", async (event) => {
             document.body.dataset.loaded = "true";
             
             const lowerName = msg.fileName?.toLowerCase() || "";
+            const isPptxLike =
+                lowerName.endsWith(".pptx") ||
+                lowerName.endsWith(".pptm") ||
+                lowerName.endsWith(".potx") ||
+                lowerName.endsWith(".potm") ||
+                lowerName.endsWith(".ppsx") ||
+                lowerName.endsWith(".ppsm");
+            const isPptLike =
+                lowerName.endsWith(".ppt") ||
+                lowerName.endsWith(".pps") ||
+                lowerName.endsWith(".pot");
 
-            if (lowerName.endsWith(".pptx")) {
+            if (isPptxLike) {
                 const slides = await renderPptxSlides(msg.base64, MAX_SLIDES);
                 slidesCache = slides;
                 
@@ -318,7 +392,7 @@ window.addEventListener("message", async (event) => {
                 updateSlideVisibility();
                 applyZoom();
                 updatePageInfo();
-            } else if (lowerName.endsWith(".ppt")) {
+            } else if (isPptLike) {
                 const slides = await renderPptSlides(msg.base64);
                 slidesCache = slides;
 
