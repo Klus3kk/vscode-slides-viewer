@@ -696,7 +696,7 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
                     if (frameBox && drawingTarget) {
                         const diagramPath = resolveMediaPath(currentPath, drawingTarget);
                         const diagramShapes = await parseDiagramDrawing(zip, diagramPath, frameBox, themeColors);
-                        shapes.push(...diagramShapes.map((s) => ({ ...s, isMaster })));
+                        shapes.push(...diagramShapes.map((s) => ({ ...s, isMaster, isDiagram: true })));
                     }
                 }
             }
@@ -733,16 +733,18 @@ function normalizeDiagramShapes(shapes, frameBox) {
     const maxY = Math.max(...shapes.map((s) => s.box.y + s.box.cy));
     const spanX = Math.max(1, maxX - minX);
     const spanY = Math.max(1, maxY - minY);
-    const scaleX = frameBox.cx / spanX;
-    const scaleY = frameBox.cy / spanY;
+    // Scale to fit, but center inside frame and avoid upscaling past 1:1.
+    const scale = Math.min(frameBox.cx / spanX, frameBox.cy / spanY, 1);
+    const offsetX = frameBox.x + (frameBox.cx - spanX * scale) / 2 - minX * scale;
+    const offsetY = frameBox.y + (frameBox.cy - spanY * scale) / 2 - minY * scale;
 
     return shapes.map((s) => ({
         ...s,
         box: {
-            x: frameBox.x + (s.box.x - minX) * scaleX,
-            y: frameBox.y + (s.box.y - minY) * scaleY,
-            cx: s.box.cx * scaleX,
-            cy: s.box.cy * scaleY
+            x: offsetX + s.box.x * scale,
+            y: offsetY + s.box.y * scale,
+            cx: s.box.cx * scale,
+            cy: s.box.cy * scale
         }
     }));
 }
@@ -753,9 +755,17 @@ async function parseDiagramDrawing(zip, diagramPath, frameBox, themeColors = DEF
         if (!xml) return [];
         const doc = parseXml(xml);
         if (!doc) return [];
-        const spTree = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "spTree");
+        const spTree = Array.from(doc.getElementsByTagName("*")).find(
+            (el) => el.localName === "spTree" || el.localName === "spTreeUIdx"
+        );
         if (!spTree) return [];
-        const shapes = await parseShapesFromTree(spTree, {}, diagramPath, zip, { isMaster: false, skipPlaceholders: false, themeColors });
+        const shapes = await parseShapesFromTree(spTree, {}, diagramPath, zip, {
+            isMaster: false,
+            skipPlaceholders: false,
+            themeColors
+        });
+        // Ensure the rightArrow background is behind boxes: sort by area descending.
+        shapes.sort((a, b) => b.box.cx * b.box.cy - a.box.cx * a.box.cy);
         return normalizeDiagramShapes(shapes, frameBox);
     } catch (e) {
         return [];

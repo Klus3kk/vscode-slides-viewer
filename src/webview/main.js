@@ -196,10 +196,11 @@ function renderSlidesToHtml(slides) {
                             `<div class="chart-legend">${legend}</div>` +
                             `</div>`;
                     }
-                    
+
                     if (shape.textData) {
                         console.log(`Rendering text with ${shape.textData.paragraphs.length} paragraphs`);
-                        const verticalAlign = shape.textData.verticalAlign || 'center';
+                        let verticalAlign = shape.textData.verticalAlign || 'center';
+                        if (shape.isDiagram) verticalAlign = 'center';
                         const multipleParas = shape.textData.paragraphs.length > 1;
                         const isHeadline =
                             shape.textData.paragraphs.length === 1 &&
@@ -254,10 +255,11 @@ function renderSlidesToHtml(slides) {
                     }).join('');
                             
                             const textAlign = para.align || 'left';
+                            const diagramAlign = shape.isDiagram ? 'center' : null;
                             const indentPx = Math.max(0, Math.round(((para.marL || 0) + (para.indent || 0)) * scale));
                             const paraStyles = [];
-                            paraStyles.push(`text-align:${textAlign};`);
-                            paraStyles.push(`padding-left:${indentPx}px;`);
+                            paraStyles.push(`text-align:${diagramAlign || textAlign};`);
+                            paraStyles.push(shape.isDiagram ? "padding:0;" : `padding-left:${indentPx}px;`);
                             if (para.lineHeight) paraStyles.push(`line-height:${para.lineHeight};`);
                             if (para.spaceBefore) paraStyles.push(`margin-top:${para.spaceBefore.toFixed(2)}px;`);
                             if (para.spaceAfter) paraStyles.push(`margin-bottom:${para.spaceAfter.toFixed(2)}px;`);
@@ -278,15 +280,19 @@ function renderSlidesToHtml(slides) {
                                     ? "left"
                                     : textAlign;
                             // overwrite alignment last to keep resolvedAlign
-                            paraStyles[0] = `text-align:${resolvedAlign};`;
+                            paraStyles[0] = `text-align:${diagramAlign || resolvedAlign};`;
                             return `<p class="para" style="${paraStyles.join(' ')}">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
                         const whiteSpace = (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
-                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};border-radius:${borderRadius}px;white-space:${whiteSpace};">${textHtml}</div>`;
+                        const diagCenter = shape.isDiagram ? "align-items:center;justify-content:center;" : "";
+                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${diagCenter || `align-items:${verticalAlign};justify-content:${verticalAlign};`}border-radius:${borderRadius}px;white-space:${whiteSpace};">${textHtml}</div>`;
                     } else {
                         const strokeStyle = stroke ? `border:${Math.max(1, stroke.width || 1)}px solid ${stroke.color || "#000"};` : "";
-                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${strokeStyle}border-radius:${borderRadius}px;"></div>`;
+                        const arrowClip = shape.geom === "rightArrow"
+                            ? "clip-path: polygon(0% 25%, 70% 25%, 70% 0%, 100% 50%, 70% 100%, 70% 75%, 0% 75%);"
+                            : "";
+                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${strokeStyle}border-radius:${borderRadius}px;${arrowClip}"></div>`;
                     }
                 })
                 .join("");
