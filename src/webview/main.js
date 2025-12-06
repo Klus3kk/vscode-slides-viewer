@@ -112,6 +112,7 @@ function renderSlidesToHtml(slides) {
                             bgStyle = 'background: transparent;';
                         }
                     }
+                    const stroke = shape.stroke;
                     
                     const nearlySquare = Math.abs(width - height) / Math.max(width, height) < 0.15;
                     let borderRadius = 0;
@@ -188,12 +189,23 @@ function renderSlidesToHtml(slides) {
                     if (shape.textData) {
                         console.log(`Rendering text with ${shape.textData.paragraphs.length} paragraphs`);
                         const verticalAlign = shape.textData.verticalAlign || 'center';
+                        const multipleParas = shape.textData.paragraphs.length > 1;
                         const isHeadline =
                             shape.textData.paragraphs.length === 1 &&
                             shape.textData.paragraphs[0].runs.length === 1 &&
                             (shape.textData.paragraphs[0].runs[0].text || "").length <= 40;
+                        const hasUrlInShape = shape.textData.paragraphs.some((p) =>
+                            p.runs.some((r) => {
+                                const lower = (r.text || "").toLowerCase();
+                                return lower.includes("http://") || lower.includes("https://") || lower.includes(".com");
+                            })
+                        );
                         const textHtml = shape.textData.paragraphs.map(para => {
                             const paraTextLower = para.runs.map(r => (r.text || "").toLowerCase()).join(" ");
+                            const paraContainsUrl =
+                                paraTextLower.includes("http://") ||
+                                paraTextLower.includes("https://") ||
+                                paraTextLower.includes(".com");
                             const paraForceWhite =
                                 paraTextLower.includes("keynotetemplate") ||
                                 paraTextLower.includes("visit") ||
@@ -221,6 +233,10 @@ function renderSlidesToHtml(slides) {
                         
                         const styleAttr = styles.length > 0 ? ` style="${styles.join('; ')}"` : '';
                         const safeText = escapeHtml(run.text).replace(/\n/g, "<br/>");
+                        if (run.href) {
+                            const hrefSafe = escapeHtml(run.href);
+                            return `<a href="${hrefSafe}" target="_blank" rel="noopener noreferrer"${styleAttr}>${safeText}</a>`;
+                        }
                         return `<span${styleAttr}>${safeText}</span>`;
                     }).join('');
                             
@@ -236,13 +252,20 @@ function renderSlidesToHtml(slides) {
                                 const suffix = para.bullet.suffix || ".";
                                 bulletHtml = `<span class="bullet" style="${bulletSize}">${escapeHtml(prefix)}${para.bullet.index}${escapeHtml(suffix)}</span>`;
                             }
-                            return `<p class="para" style="text-align:${textAlign}; padding-left:${indentPx}px;">${bulletHtml}<span>${runHtml}</span></p>`;
+                            // Body paragraphs inside multi-paragraph blocks often carry a center alignment flag;
+                            // override to left for readability and to avoid apparent leading tabs.
+                            const resolvedAlign =
+                                paraContainsUrl || (multipleParas && textAlign === "center") || (textAlign === "center" && paraTextLower.length > 30)
+                                    ? "left"
+                                    : textAlign;
+                            return `<p class="para" style="text-align:${resolvedAlign}; padding-left:${indentPx}px;">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
-                        const whiteSpace = isHeadline ? "nowrap" : "normal";
+                        const whiteSpace = (isHeadline || hasUrlInShape) ? "nowrap" : "normal";
                         return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};border-radius:${borderRadius}px;white-space:${whiteSpace};">${textHtml}</div>`;
                     } else {
-                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle};border-radius:${borderRadius}px;"></div>`;
+                        const strokeStyle = stroke ? `border:${Math.max(1, stroke.width || 1)}px solid ${stroke.color || "#000"};` : "";
+                        return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}${strokeStyle}border-radius:${borderRadius}px;"></div>`;
                     }
                 })
                 .join("");
