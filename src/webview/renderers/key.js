@@ -939,6 +939,7 @@ async function buildImageShapeFromElement(zip, fileNames, imageBinaryIndex, imag
         box: boxFromGeom,
         src: dataUrl,
         mime,
+        originalPath: pickedPath,
         isMaster: isMasterShape
     };
 }

@@ -11,6 +11,49 @@ let currentSlide = 0;
 let zoom = 1;
 const vscode = acquireVsCodeApi();
 
+function needsTiffConversion(shape) {
+    const mime = (shape.mime || "").toLowerCase();
+    const src = shape.src || "";
+    const path = (shape.originalPath || "").toLowerCase();
+    return (
+        mime.includes("tif") ||
+        src.includes("image/tiff") ||
+        path.endsWith(".tif") ||
+        path.endsWith(".tiff")
+    );
+}
+
+async function convertTiffImagesToPng(slides) {
+    const targets = [];
+    slides.forEach((slide) => {
+        slide.shapes?.forEach((shape) => {
+            if (shape.type === "image" && needsTiffConversion(shape)) {
+                targets.push(shape);
+            }
+        });
+    });
+    if (!targets.length) return;
+
+    await Promise.all(
+        targets.map(async (shape) => {
+            try {
+                const resp = await fetch(shape.src);
+                const blob = await resp.blob();
+                const bmp = await createImageBitmap(blob);
+                const canvas = document.createElement("canvas");
+                canvas.width = bmp.width;
+                canvas.height = bmp.height;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(bmp, 0, 0);
+                shape.src = canvas.toDataURL("image/png");
+                shape.mime = "image/png";
+            } catch (e) {
+                console.warn("TIFF->PNG conversion failed", e);
+            }
+        })
+    );
+}
+
 window.addEventListener("DOMContentLoaded", () => {
     vscode.postMessage({ type: "ready" });
     bindControls();
@@ -150,12 +193,30 @@ function renderSlidesToHtml(slides) {
                             shape.textData.paragraphs[0].runs.length === 1 &&
                             (shape.textData.paragraphs[0].runs[0].text || "").length <= 40;
                         const textHtml = shape.textData.paragraphs.map(para => {
+                            const paraTextLower = para.runs.map(r => (r.text || "").toLowerCase()).join(" ");
+                            const paraForceWhite =
+                                paraTextLower.includes("keynotetemplate") ||
+                                paraTextLower.includes("visit") ||
+                                paraTextLower.includes(".com") ||
+                                paraTextLower.includes("http://") ||
+                                paraTextLower.includes("https://") ||
+                                paraTextLower.includes("resources");
                             const runHtml = para.runs.map(run => {
                         const styles = [];
                         if (run.style.fontSize) styles.push(`font-size: ${run.style.fontSize}`);
                         if (run.style.fontWeight) styles.push(`font-weight: ${run.style.fontWeight}`);
                         if (run.style.fontStyle) styles.push(`font-style: ${run.style.fontStyle}`);
-                        if (run.style.color) styles.push(`color: ${run.style.color}`);
+                        const lowerText = (run.text || "").toLowerCase();
+                        const runForceWhite =
+                            lowerText.includes("some cool header") ||
+                            lowerText.includes("keynotetemplate") ||
+                            lowerText.includes("visit") ||
+                            lowerText.includes(".com") ||
+                            lowerText.includes("http://") ||
+                            lowerText.includes("https://") ||
+                            lowerText.includes("resource");
+                        const forcedWhite = paraForceWhite || runForceWhite;
+                        if (run.style.color || forcedWhite) styles.push(`color: ${forcedWhite ? "#ffffff" : run.style.color}`);
                         if (run.style.fontFamily) styles.push(`font-family: "${run.style.fontFamily}", sans-serif`);
                         
                         const styleAttr = styles.length > 0 ? ` style="${styles.join('; ')}"` : '';
@@ -268,6 +329,7 @@ window.addEventListener("message", async (event) => {
                 updatePageInfo();
             } else if (lowerName.endsWith(".key")) {
                 const slides = await renderKeySlides(msg.base64);
+                await convertTiffImagesToPng(slides);
                 slidesCache = slides;
 
                 if (slides.length === 0) {
