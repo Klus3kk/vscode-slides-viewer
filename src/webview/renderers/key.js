@@ -530,12 +530,12 @@ function mergeTextStyles(base, override) {
 function styleToViewerRunStyle(style) {
     const out = {};
     if (style.fontSize != null) {
-        const px = style.fontSize * (96 / 72) * 0.6;
+        const px = style.fontSize * (96 / 72) * 0.5;
         out.fontSize = `${Math.round(px)}px`;
     }
     if (style.bold) out.fontWeight = "bold";
     if (style.italic) out.fontStyle = "italic";
-    if (style.color) out.color = style.color;
+    out.color = style.color || "#000000";
     if (style.fontFamily) out.fontFamily = style.fontFamily;
     return out;
 }
@@ -1337,6 +1337,14 @@ export async function renderKeySlides(base64, maxSlides = 20) {
         const masterBackgroundMap = Object.create(null);
         const masterNodeMap = Object.create(null);
 
+        function shapeTextContent(shape) {
+            if (!shape || !shape.textData) return "";
+            return shape.textData.paragraphs
+                .map((p) => p.runs.map((r) => r.text || "").join(" "))
+                .join(" ")
+                .toLowerCase();
+        }
+
         for (const masterNode of masterNodes) {
             const mid = getNodeId(masterNode);
             if (mid) masterNodeMap[mid] = masterNode;
@@ -1358,7 +1366,8 @@ export async function renderKeySlides(base64, maxSlides = 20) {
         }
 
         const slides = [];
-        for (const slideNode of slideNodes) {
+        for (let sIdx = 0; sIdx < slideNodes.length; sIdx++) {
+            const slideNode = slideNodes[sIdx];
             if (slides.length >= maxSlides) break;
 
             const masterRef = getMasterRefId(slideNode);
@@ -1374,6 +1383,13 @@ export async function renderKeySlides(base64, maxSlides = 20) {
                 graphicStyleIndex
             );
             let combinedShapes = [...inheritedShapes, ...slideShapes];
+            if (sIdx === 0) {
+                combinedShapes = combinedShapes.filter((sh) => {
+                    const txt = shapeTextContent(sh);
+                    if (!txt) return true;
+                    return !txt.includes("keynotetemplate");
+                });
+            }
             if (!combinedShapes.length) continue;
 
             let background = await getSlideBackground(slideNode, graphicStyleIndex, slideStyleIndex, imageBinaryIndex, zip, fileNames);

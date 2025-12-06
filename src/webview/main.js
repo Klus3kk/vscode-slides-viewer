@@ -145,6 +145,10 @@ function renderSlidesToHtml(slides) {
                     if (shape.textData) {
                         console.log(`Rendering text with ${shape.textData.paragraphs.length} paragraphs`);
                         const verticalAlign = shape.textData.verticalAlign || 'center';
+                        const isHeadline =
+                            shape.textData.paragraphs.length === 1 &&
+                            shape.textData.paragraphs[0].runs.length === 1 &&
+                            (shape.textData.paragraphs[0].runs[0].text || "").length <= 40;
                         const textHtml = shape.textData.paragraphs.map(para => {
                             const runHtml = para.runs.map(run => {
                         const styles = [];
@@ -174,7 +178,8 @@ function renderSlidesToHtml(slides) {
                             return `<p class="para" style="text-align:${textAlign}; padding-left:${indentPx}px;">${bulletHtml}<span>${runHtml}</span></p>`;
                         }).join('');
                         
-                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};border-radius:${borderRadius}px;">${textHtml}</div>`;
+                        const whiteSpace = isHeadline ? "nowrap" : "normal";
+                        return `<div class="shape text-shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle}align-items:${verticalAlign};justify-content:${verticalAlign};border-radius:${borderRadius}px;white-space:${whiteSpace};">${textHtml}</div>`;
                     } else {
                         return `<div class="shape" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px;${bgStyle};border-radius:${borderRadius}px;"></div>`;
                     }
