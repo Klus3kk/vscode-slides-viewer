@@ -197,7 +197,7 @@ function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLOR
         const shapeDefault = parseRPrStyle(Array.from(txBody.querySelectorAll("defRPr"))[0]);
 
         const bodyPr = Array.from(txBody.children).find((el) => el.localName === "bodyPr");
-        let verticalAlign = "center";
+        let verticalAlign = "flex-start";
         if (bodyPr) {
             const anchor = bodyPr.getAttribute("anchor");
             if (anchor === "t") verticalAlign = "flex-start";
@@ -219,6 +219,10 @@ function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLOR
             let spaceBefore = null;
             let spaceAfter = null;
             const paraDefaults = parseRPrStyle(Array.from(pPr?.children || []).find((el) => el.localName === "defRPr"), themeColors);
+            const fallbackFontSize =
+                paraDefaults.fontSize ||
+                shapeDefault.fontSize ||
+                (placeholderType === "title" || placeholderType === "ctrTitle" ? "44pt" : "18pt");
 
             if (pPr) {
                 const algnAttr = pPr.getAttribute("algn");
@@ -274,7 +278,7 @@ function extractTextFromShape(shapeNode, rels, themeColors = DEFAULT_THEME_COLOR
                 const style = mergeStyles(shapeDefault, mergeStyles(paraDefaults, parseRPrStyle(rPr, themeColors)));
 
                 if (!style.fontSize) {
-                    style.fontSize = placeholderType === "title" || placeholderType === "ctrTitle" ? "44pt" : "28pt";
+                    style.fontSize = fallbackFontSize;
                 }
                 if (!style.fontWeight && (placeholderType === "title" || placeholderType === "ctrTitle")) {
                     style.fontWeight = "bold";
@@ -324,6 +328,35 @@ function isPlaceholder(shapeNode) {
     if (!nvPr) return false;
     const ph = Array.from(nvPr.children).find((el) => el.localName === "ph");
     return !!ph;
+}
+
+function getPlaceholderInfo(shapeNode) {
+    const nvSpPr = Array.from(shapeNode.children).find((el) => el.localName === "nvSpPr");
+    if (!nvSpPr) return null;
+    const nvPr = Array.from(nvSpPr.children).find((el) => el.localName === "nvPr");
+    if (!nvPr) return null;
+    const ph = Array.from(nvPr.children).find((el) => el.localName === "ph");
+    if (!ph) return null;
+    return {
+        type: ph.getAttribute("type") || "body",
+        idx: ph.getAttribute("idx") || "0"
+    };
+}
+
+function collectPlaceholderBoxes(spTree) {
+    const map = {};
+    const spNodes = Array.from(spTree.children).filter((el) => el.localName === "sp");
+    for (const sp of spNodes) {
+        const ph = getPlaceholderInfo(sp);
+        if (!ph) continue;
+        const box = getShapeBox(sp);
+        if (!box) continue;
+        const key = `${ph.type}:${ph.idx}`;
+        map[key] = box;
+        map[ph.type] = map[ph.type] || box;
+        map[`idx:${ph.idx}`] = map[`idx:${ph.idx}`] || box;
+    }
+    return map;
 }
 
 function getGroupTransform(node) {
@@ -544,25 +577,26 @@ async function parseMasterShapes(zip, masterPath, themeColors = DEFAULT_THEME_CO
 
         const masterXml = await zip.file(masterPath)?.async("text");
         if (!masterXml) {
-            return { shapes: [], background: null, rels: {} };
+            return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
         }
 
         const doc = parseXml(masterXml);
         if (!doc) {
-            return { shapes: [], background: null, rels: {} };
+            return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
         }
 
         const spTree = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "spTree");
         if (!spTree) {
-            return { shapes: [], background: null, rels: {} };
+            return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
         }
 
         const rels = await getRelationships(zip, masterPath);
-        const shapes = await parseShapesFromTree(spTree, rels, masterPath, zip, { isMaster: true, skipPlaceholders: true, themeColors });
+        const placeholderBoxes = collectPlaceholderBoxes(spTree);
+        const shapes = await parseShapesFromTree(spTree, rels, masterPath, zip, { isMaster: true, skipPlaceholders: true, themeColors, placeholderBoxes });
         const background = await parseBackground(zip, doc, rels, masterPath, themeColors);
-        return { shapes, background, rels };
+        return { shapes, background, rels, placeholderBoxes };
     } catch (e) {
-        return { shapes: [], background: null, rels: {} };
+        return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
     }
 }
 
@@ -592,7 +626,7 @@ function parseTable(tableNode, themeColors = DEFAULT_THEME_COLORS) {
 }
 
 async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {}) {
-    const { isMaster = false, skipPlaceholders = false, themeColors = DEFAULT_THEME_COLORS } = options;
+    const { isMaster = false, skipPlaceholders = false, themeColors = DEFAULT_THEME_COLORS, placeholderBoxes = {} } = options;
     const shapes = [];
     const nodes = Array.from(spTree.children).filter((el) =>
         ["sp", "pic", "graphicFrame", "grpSp"].includes(el.localName)
@@ -613,7 +647,14 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
             continue;
         }
 
-        const box = getShapeBox(node);
+        let box = getShapeBox(node);
+        if (!box) {
+            const phInfo = getPlaceholderInfo(node);
+            if (phInfo) {
+                const key = `${phInfo.type}:${phInfo.idx}`;
+                box = placeholderBoxes[key] || placeholderBoxes[phInfo.type] || placeholderBoxes[`idx:${phInfo.idx}`] || null;
+            }
+        }
         if (!box) continue;
 
         if (node.localName === "sp") {
@@ -708,20 +749,21 @@ async function parseShapesFromTree(spTree, rels, currentPath, zip, options = {})
 
 async function parseLayoutShapes(zip, layoutPath, themeColors = DEFAULT_THEME_COLORS) {
     try {
-        if (!layoutPath) return { shapes: [], background: null, rels: {} };
+        if (!layoutPath) return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
         const xml = await zip.file(layoutPath)?.async("text");
-        if (!xml) return { shapes: [], background: null, rels: {} };
+        if (!xml) return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
         const doc = parseXml(xml);
-        if (!doc) return { shapes: [], background: null, rels: {} };
+        if (!doc) return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
         const rels = await getRelationships(zip, layoutPath);
         const spTree = Array.from(doc.getElementsByTagName("*")).find((el) => el.localName === "spTree");
+        const placeholderBoxes = spTree ? collectPlaceholderBoxes(spTree) : {};
         const shapes = spTree
-            ? await parseShapesFromTree(spTree, rels, layoutPath, zip, { isMaster: true, skipPlaceholders: true, themeColors })
+            ? await parseShapesFromTree(spTree, rels, layoutPath, zip, { isMaster: true, skipPlaceholders: true, themeColors, placeholderBoxes })
             : [];
         const background = await parseBackground(zip, doc, rels, layoutPath, themeColors);
-        return { shapes, background, rels };
+        return { shapes, background, rels, placeholderBoxes };
     } catch (e) {
-        return { shapes: [], background: null, rels: {} };
+        return { shapes: [], background: null, rels: {}, placeholderBoxes: {} };
     }
 }
 
@@ -733,10 +775,10 @@ function normalizeDiagramShapes(shapes, frameBox) {
     const maxY = Math.max(...shapes.map((s) => s.box.y + s.box.cy));
     const spanX = Math.max(1, maxX - minX);
     const spanY = Math.max(1, maxY - minY);
-    // Scale to fit, but center inside frame and avoid upscaling past 1:1.
-    const scale = Math.min(frameBox.cx / spanX, frameBox.cy / spanY, 1);
-    const offsetX = frameBox.x + (frameBox.cx - spanX * scale) / 2 - minX * scale;
-    const offsetY = frameBox.y + (frameBox.cy - spanY * scale) / 2 - minY * scale;
+    // Keep native positioning when possible; only downscale if diagram exceeds frame.
+    const scale = Math.min(1, frameBox.cx / spanX, frameBox.cy / spanY);
+    const offsetX = frameBox.x - minX * scale;
+    const offsetY = frameBox.y - minY * scale;
 
     return shapes.map((s) => ({
         ...s,
