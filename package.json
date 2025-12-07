@@ -1,38 +1,57 @@
 {
   "name": "presentation-viewer",
   "displayName": "Presentation Viewer",
-  "description": "Open PPTX, PPT, ODP and other presentations directly in VS Code.",
+  "publisher": "klus3kk",
+  "description": "View PPTX, PPT, ODP and KEY presentations directly inside VS Code",
   "version": "0.0.1",
+
+  "icon": "resources/icon.png",
+  "main": "./dist/extension.js",
+
   "scripts": {
     "compile": "tsc -p ./"
   },
+
   "engines": {
     "vscode": "^1.80.0"
   },
+
+  "extensionKind": ["ui"],
+
+  "galleryBanner": {
+    "theme": "dark",
+    "color": "#1e1e1e"
+  },
+
   "categories": [
-    "Other"
+    "Other",
+    "Visualization"
   ],
+
+  "keywords": [
+    "pptx",
+    "ppt",
+    "odp",
+    "key",
+    "keynote",
+    "presentation",
+    "slides",
+    "viewer",
+    "office",
+    "preview"
+  ],
+
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Klus3kk/vscode-slides-viewer"
+  },
+
   "activationEvents": [
     "onStartupFinished",
-    "workspaceContains:**/*.pptx",
-    "workspaceContains:**/*.pptm",
-    "workspaceContains:**/*.potx",
-    "workspaceContains:**/*.potm",
-    "workspaceContains:**/*.ppsx",
-    "workspaceContains:**/*.ppsm",
-    "workspaceContains:**/*.ppt",
-    "workspaceContains:**/*.pps",
-    "workspaceContains:**/*.pot",
-    "workspaceContains:**/*.odp",
-    "workspaceContains:**/*.key",
     "onCustomEditor:presentationViewer.viewer",
-    "onLanguage:pptx",
-    "onLanguage:ppt",
-    "onLanguage:odp",
-    "onLanguage:keynote",
     "onCommand:presentationViewer.open"
   ],
-  "main": "./dist/extension.js",
+
   "contributes": {
     "commands": [
       {
@@ -43,34 +62,19 @@
     "languages": [
       {
         "id": "pptx",
-        "extensions": [
-          ".pptx",
-          ".pptm",
-          ".potx",
-          ".potm",
-          ".ppsx",
-          ".ppsm"
-        ]
+        "extensions": [".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm"]
       },
       {
         "id": "ppt",
-        "extensions": [
-          ".ppt",
-          ".pps",
-          ".pot"
-        ]
+        "extensions": [".ppt", ".pps", ".pot"]
       },
       {
         "id": "odp",
-        "extensions": [
-          ".odp"
-        ]
+        "extensions": [".odp"]
       },
       {
         "id": "keynote",
-        "extensions": [
-          ".key"
-        ]
+        "extensions": [".key"]
       }
     ],
     "customEditors": [
@@ -78,48 +82,28 @@
         "viewType": "presentationViewer.viewer",
         "displayName": "Presentation Viewer",
         "selector": [
-          {
-            "filenamePattern": "*.pptx"
-          },
-          {
-            "filenamePattern": "*.pptm"
-          },
-          {
-            "filenamePattern": "*.potx"
-          },
-          {
-            "filenamePattern": "*.potm"
-          },
-          {
-            "filenamePattern": "*.ppsx"
-          },
-          {
-            "filenamePattern": "*.ppsm"
-          },
-          {
-            "filenamePattern": "*.ppt"
-          },
-          {
-            "filenamePattern": "*.pps"
-          },
-          {
-            "filenamePattern": "*.pot"
-          },
-          {
-            "filenamePattern": "*.odp"
-          },
-          {
-            "filenamePattern": "*.key"
-          }
+          { "filenamePattern": "*.pptx" },
+          { "filenamePattern": "*.pptm" },
+          { "filenamePattern": "*.potx" },
+          { "filenamePattern": "*.potm" },
+          { "filenamePattern": "*.ppsx" },
+          { "filenamePattern": "*.ppsm" },
+          { "filenamePattern": "*.ppt" },
+          { "filenamePattern": "*.pps" },
+          { "filenamePattern": "*.pot" },
+          { "filenamePattern": "*.odp" },
+          { "filenamePattern": "*.key" }
         ],
         "priority": "default"
       }
     ]
   },
+
   "dependencies": {
     "cfb": "^1.2.2",
     "jszip": "^3.10.1"
   },
+
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@types/vscode": "^1.106.1",

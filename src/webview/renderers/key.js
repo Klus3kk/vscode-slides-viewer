@@ -9,14 +9,7 @@ import {
     getImageDimensions
 } from "../utils.js";
 
-// ---------------------------------------------------------------------------
-// Basic geometry helpers
-// ---------------------------------------------------------------------------
-
 function reorderShapesForZIndex(shapes) {
-    // Keep original ordering inside each group, but guarantee:
-    //   background / images / vectors  → first
-    //   text shapes                    → last (on top)
     const nonText = [];
     const text = [];
 
@@ -89,19 +82,6 @@ async function getSlideBackground(slideNode, graphicStyleIndex, slideStyleIndex,
 
     return { color: "#ffffff", found: false };
 }
-
-async function findNearestFill(node, graphicStyleIndex, imageBinaryIndex, zip, fileNames) {
-    let current = node;
-    while (current) {
-        const fill = await extractFillFromNode(current, graphicStyleIndex, imageBinaryIndex, zip, fileNames);
-        if (fill && fill.type && fill.type !== "none") {
-            return fill;
-        }
-        current = current.parentElement;
-    }
-    return null;
-}
-
 
 function getSlideSizeFromDoc(doc) {
     const sizes = Array.from(doc.getElementsByTagName("*")).filter(
@@ -186,10 +166,6 @@ function findNearestGeometry(node) {
     }
     return null;
 }
-
-// ---------------------------------------------------------------------------
-// Fill / color helpers (for shapes and background)
-// ---------------------------------------------------------------------------
 
 function extractColorFromElement(el) {
     if (!el || !el.attributes) return null;
@@ -404,10 +380,6 @@ function extractStrokeFromNode(node) {
     };
 }
 
-// ---------------------------------------------------------------------------
-// Text style system (Keynote APXL)
-// ---------------------------------------------------------------------------
-
 function parseNumberFromProperty(propEl) {
     if (!propEl) return null;
     const numEl = Array.from(propEl.getElementsByTagName("*")).find(
@@ -554,7 +526,6 @@ function resolveTextStyle(styleIndex, ref) {
         entry = lookup(entry.parentIdent);
     }
 
-    // Merge from root parent → child so child overrides.
     let merged = {};
     for (let i = chain.length - 1; i >= 0; i--) {
         merged = { ...merged, ...chain[i] };
@@ -785,10 +756,6 @@ function buildSlideStyleIndex(doc, imageBinaryIndex) {
     return map;
 }
 
-// ---------------------------------------------------------------------------
-// Slide-level helpers
-// ---------------------------------------------------------------------------
-
 function getSlideNodes(doc) {
     const all = Array.from(doc.getElementsByTagName("*"));
     const slides = [];
@@ -854,10 +821,6 @@ function getIdRef(node) {
         node.getAttribute("idref")
     );
 }
-
-// ---------------------------------------------------------------------------
-// ZIP helpers / images
-// ---------------------------------------------------------------------------
 
 function collectZipFileNames(zip) {
     return Object.keys(zip.files || {});
@@ -1048,10 +1011,6 @@ async function buildTableShapeFromElement(tableEl, slideSize, isMasterShape = fa
     };
 }
 
-// ---------------------------------------------------------------------------
-// Text and vector shapes
-// ---------------------------------------------------------------------------
-
 async function extractTextShapeFromNode(node, slideSize, styleIndex, graphicStyleIndex, imageBinaryIndex, zip, fileNames, isMasterShape = false) {
     const all = Array.from(node.getElementsByTagName("*"));
 
@@ -1198,10 +1157,6 @@ async function extractVectorShapeFromNode(node, slideSize, graphicStyleIndex, im
     };
 }
 
-// ---------------------------------------------------------------------------
-// Slide walker / shape collection
-// ---------------------------------------------------------------------------
-
 async function collectShapesForSlide(
     slideNode,
     zip,
@@ -1314,10 +1269,6 @@ async function collectShapesForSlide(
     return shapes;
 }
 
-// ---------------------------------------------------------------------------
-// Background detection
-// ---------------------------------------------------------------------------
-
 function pickBackgroundFromShapes(shapes, slideSize) {
     const areaSlide = slideSize.cx * slideSize.cy;
     let best = null;
@@ -1361,10 +1312,6 @@ function pickBackgroundFromShapes(shapes, slideSize) {
         shapes: ordered
     };
 }
-
-// ---------------------------------------------------------------------------
-// Fallback: image-only slides
-// ---------------------------------------------------------------------------
 
 async function buildFallbackSlidesFromImages(zip, maxSlides) {
     const fileNames = collectZipFileNames(zip);
@@ -1426,10 +1373,6 @@ async function buildFallbackSlidesFromImages(zip, maxSlides) {
 
     return slides;
 }
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 export async function renderKeySlides(base64, maxSlides = Infinity) {
     try {
