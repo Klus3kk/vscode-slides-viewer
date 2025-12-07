@@ -89,7 +89,7 @@ The extension reads the raw file, interprets its internal structure, and display
 * No support for audio/video/animations/transitions
 * Some files may contain unimplemented object types
 
-### Feedback & Contributions
+# Feedback & Contributions
 
 If the project helps you, give it a ⭐:
 [repository](https://github.com/Klus3kk/vscode-slides-viewer)
@@ -98,11 +98,11 @@ Pull requests are always welcome!
 
 Thank you :)
 
-### Reporting Issues
+# Reporting Issues
 
 If you find any problems or rendering errors you can report it here:
 [issues](https://github.com/Klus3kk/vscode-slides-viewer/issues)
 
-### License
+# License
 
 This project is released under the MIT License.
