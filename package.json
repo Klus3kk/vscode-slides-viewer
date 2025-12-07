@@ -6,7 +6,7 @@
   "version": "0.0.1",
 
   "icon": "resources/icon.png",
-  "main": "./src/extension.ts",
+  "main": "./src/extension.js",
 
   "scripts": {
     "compile": "tsc -p ./"
