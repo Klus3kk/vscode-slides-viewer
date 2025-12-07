@@ -116,3 +116,16 @@ export function getOdpStyle(allStyles, name) {
     if (!name) return {};
     return allStyles[name] || {};
 }
+
+export function guessVectorPlaceholderLabel(shape) {
+    if (!shape) return "";
+    if (shape.textData && shape.textData.paragraphs) {
+        const txt = shape.textData.paragraphs
+            .map(p => p.runs.map(r => r.text || "").join(" "))
+            .join(" ")
+            .trim()
+            .toLowerCase();
+        return txt || "";
+    }
+    return "";
+}

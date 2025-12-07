@@ -162,9 +162,9 @@ function parseTableData(tableEl) {
 async function frameToShapes(frame, allStyles, allListStyles, zip, options = {}) {
     const shapes = [];
     const isMaster = options.isMaster ?? false;
-    const skipPlaceholders = options.skipPlaceholders ?? false;
+    const isPlaceholder = frame.getAttribute("presentation:placeholder") === "true";
 
-    if (skipPlaceholders && frame.getAttribute("presentation:placeholder") === "true") {
+    if (isMaster && isPlaceholder) {
         return shapes;
     }
 
@@ -475,9 +475,9 @@ export async function renderOdpSlides(base64, maxSlides = Infinity) {
 
         const masterName = page.getAttribute("draw:master-page-name");
         const master = masterName ? masterPages[masterName] : undefined;
-        if (master?.shapes?.length) {
-            shapes.push(...master.shapes);
-        }
+        // if (master?.shapes?.length) { // this one line costed me 2h of my life :))
+        //     shapes.push(...master.shapes);
+        // }
 
         if (!size) {
             const layoutName = master?.pageLayout;
