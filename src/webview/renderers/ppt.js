@@ -1,5 +1,7 @@
 import { decodeBase64ToUint8, guessMimeFromBytes, uint8ToBase64 } from "../utils.js";
 
+const CFB = window.CFB;
+
 export async function renderPptSlides(base64) {
     const buffer = decodeBase64ToUint8(base64);
     const cfb = CFB.read(buffer, { type: "array" });
@@ -471,21 +473,6 @@ function parsePptSlide(stream, offset, endOffset, slideWidthPx, slideHeightPx) {
         offset = recordEnd;
     }
 
-    const existingText = shapes
-        .filter((s) => s.type === "text" && s.textData?.paragraphs?.length)
-        .flatMap((s) =>
-            s.textData.paragraphs
-                .flatMap((p) => p.runs.map((r) => r.text || "").join(""))
-                .filter((t) => t && t.trim().length > 0)
-        );
-    const allTexts = [...collectedTexts, ...existingText].filter((t) => t && t.trim().length > 0);
-    if (allTexts.length > 0) {
-        const nonText = shapes.filter((s) => s.type !== "text");
-        const generated = buildPptTextShapesFromList(allTexts, slideWidthPx, slideHeightPx);
-        shapes.length = 0;
-        shapes.push(...nonText, ...generated);
-    }
-
     return shapes;
 }
 
@@ -525,11 +512,9 @@ function parsePptShapeProperties(stream, offset, length) {
         else if (propId === 0x0005) props.bounds.top = propValue;
         else if (propId === 0x0006) props.bounds.right = propValue;
         else if (propId === 0x0007) props.bounds.bottom = propValue;
-        else if (propId === 0x0181) {
-            props.fillColor = pptColorFromInt(propValue);
-        } else if (propId === 0x0180) {
-            props.fillType = propValue;
-        }
+        else if (propId === 0x0181) props.fillColor = pptColorFromInt(propValue);
+        else if (propId === 0x0180) props.fillType = propValue;
+        else if (propId === 0x0104) props.blipRef = propValue & 0xFFFF; 
     }
 
     return props;
@@ -656,7 +641,6 @@ function pptColorFromInt(colorInt) {
 function createPptShape(data, slideWidth, slideHeight) {
     const emusToPixels = (emus) => Math.round(emus / 9525);
 
-    // If we have bounds, treat them as EMUs and convert; otherwise use a generous fallback box.
     let box;
     if (data.bounds && (data.bounds.left || data.bounds.left === 0)) {
         const { left = 0, top = 0, right = slideWidth, bottom = slideHeight } = data.bounds;
@@ -667,7 +651,6 @@ function createPptShape(data, slideWidth, slideHeight) {
             cy: emusToPixels(bottom - top)
         };
     } else {
-        // Fallback: center a box that fills ~80% of the slide
         const fallbackWidth = Math.round(slideWidth * 0.8);
         const fallbackHeight = Math.round(slideHeight * 0.6);
         const offsetX = Math.round((slideWidth - fallbackWidth) / 2);
@@ -675,7 +658,6 @@ function createPptShape(data, slideWidth, slideHeight) {
         box = { x: offsetX, y: offsetY, cx: fallbackWidth, cy: fallbackHeight };
     }
 
-    // Guard against degenerate sizes
     if (box.cx <= 0 || box.cy <= 0) {
         box.cx = Math.max(box.cx, Math.round(slideWidth * 0.6));
         box.cy = Math.max(box.cy, Math.round(slideHeight * 0.6));
@@ -687,19 +669,25 @@ function createPptShape(data, slideWidth, slideHeight) {
         isMaster: false
     };
 
+    // 🔹 keep blipRef so we can attach pictures later
+    if (data.blipRef) {
+        shape.blipRef = data.blipRef;
+    }
+
     if (data.fillColor && data.fillType !== 0) {
         shape.fill = { type: "solid", color: data.fillColor };
     }
 
     if (data.image) {
         shape.src = data.image.dataUrl;
+        shape.mime = data.image.mime;
     }
 
     if (data.text) {
         shape.textData = {
             paragraphs: [{
                 align: "left",
-                runs: [{ 
+                runs: [{
                     text: data.text,
                     style: { fontSize: "18pt", color: "#000000" }
                 }],

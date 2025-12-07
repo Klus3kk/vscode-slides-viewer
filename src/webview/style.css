@@ -251,18 +251,6 @@ body {
     display: inline-block;
 }
 
-/* .slide-label {
-    position: absolute;
-    right: 6px;
-    bottom: 6px;
-    font-size: 11px;
-    color: #666;
-    background: rgba(255, 255, 255, 0.9);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-weight: 600;
-} */
-
 .hidden {
     display: none !important;
 }
