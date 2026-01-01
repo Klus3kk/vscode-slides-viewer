@@ -8,7 +8,6 @@ No native bindings and no external office applications are required.
 The extension reads the raw file, interprets its internal structure, and displays slides using HTML/CSS inside a VS Code webview.
 
 
-
 <p align="center">
   <img src="./resources/demo.gif" width="700" />
 </p>
