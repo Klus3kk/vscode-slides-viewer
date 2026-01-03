@@ -1,7 +1,7 @@
 # Presentation Viewer
 
 A Visual Studio Code extension that renders presentation files directly inside the editor.
-All rendering is implemented through **custom JavaScript parsers**
+All rendering is implemented through **JavaScript parsers**
 
 No native bindings and no external office applications are required.
 
